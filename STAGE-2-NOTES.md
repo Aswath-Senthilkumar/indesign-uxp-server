@@ -393,6 +393,118 @@ practice as a side-effect.
 
 ---
 
+## Stage 2D — No-op round trip
+
+Goal: prove the full chain works by sending real requests through it. Three
+escalating curls, each verified at every hop (caller → bridge log → plugin
+DevTools console → bridge log → caller).
+
+### Pre-flight
+
+`GET /status` before the test:
+
+```
+{"connected":true,"queueDepth":0}
+```
+
+`/tmp/bridge.log` was at 6 lines (startup banner + Plugin connected event).
+
+### Test #1 — bare round trip + primitive serialization
+
+```
+$ curl -s -X POST http://127.0.0.1:3000/execute \
+       -H 'Content-Type: application/json' \
+       -d '{"code":"return 1 + 1;"}'
+{"result":2}
+HTTP=200 TIME=0.039799s
+```
+
+Bridge log:
+
+```
+[Bridge] Sending execute: 66873768-812c-43b0-a102-ef62a50564cf return 1 + 1;
+[Bridge] From plugin: {"type":"result","id":"66873768-812c-43b0-a102-ef62a50564cf","result":2}
+```
+
+Plugin DevTools (confirmed by human):
+
+```
+[Plugin] Received: {"type":"execute","id":"66873768-812c-43b0-a102-ef62a50564cf","code":"return 1 + 1;"}
+```
+
+### Test #2 — DOM access + object serialization
+
+```
+$ curl -s -X POST http://127.0.0.1:3000/execute \
+       -H 'Content-Type: application/json' \
+       -d '{"code":"return { docs: app.documents.length };"}'
+{"result":{"docs":0}}
+HTTP=200 TIME=0.033894s
+```
+
+Bridge log:
+
+```
+[Bridge] Sending execute: a7c85615-93f9-4c36-b1dc-62d6bff3a10a return { docs: app.documents.length };
+[Bridge] From plugin: {"type":"result","id":"a7c85615-93f9-4c36-b1dc-62d6bff3a10a","result":{"docs":0}}
+```
+
+Plugin DevTools (confirmed by human): matching `[Plugin] Received: …` line
+with id `a7c85615-…`.
+
+### Test #3 — multi-field DOM serialization
+
+```
+$ curl -s -X POST http://127.0.0.1:3000/execute \
+       -H 'Content-Type: application/json' \
+       -d '{"code":"return { docs: app.documents.length, version: app.version, name: app.name };"}'
+{"result":{"docs":0,"version":"21.3.0.60","name":"Adobe InDesign"}}
+HTTP=200 TIME=0.029998s
+```
+
+Bridge log:
+
+```
+[Bridge] Sending execute: 19975fea-d237-4f0d-abf4-1d8c1ee498e5 return { docs: app.documents.length, version: app.version, name: app.name };
+[Bridge] From plugin: {"type":"result","id":"19975fea-d237-4f0d-abf4-1d8c1ee498e5","result":{"docs":0,"version":"21.3.0.60","name":"Adobe InDesign"}}
+```
+
+Plugin DevTools (confirmed by human): matching `[Plugin] Received: …` line
+with id `19975fea-…`.
+
+`app.version = 21.3.0.60` matches the InDesign 2026 build seen in Help →
+About during Stage 2C — confirms we are talking to the same instance.
+
+### Latency profile
+
+| # | Body | Total |
+|---|---|---|
+| 1 | `1 + 1` (cold) | 40 ms |
+| 2 | `app.documents.length` | 34 ms |
+| 3 | multi-field DOM read (warm) | 30 ms |
+
+Above the prompt's "single-digit ms" expectation. Likely contributors:
+Node + Express + WebSocket overhead, `new Function('app', code)` JIT on
+each call, Windows pipe + curl process startup. The trend (40 → 34 → 30)
+is consistent with JIT/cache warmup.
+
+For our 12-tile render flow, ~30 ms × dozens of operations ≈ low
+single-second total — acceptable. If we see it climb into hundreds of ms
+per call later, the natural fix is to batch a whole render into one
+`/execute` script (one HTTP round-trip, one `new Function` compile, many
+DOM operations inside).
+
+### ID correlation
+
+All three requests round-tripped with their UUIDs preserved end-to-end
+(caller → bridge → plugin → bridge → caller). The bridge's
+`pending` map keyed by `uuid` is doing its job. Concurrent-request
+correlation will be exercised explicitly in Stage 2E Test 5.
+
+### Stage 2D status: **complete pass.** Full chain proven end-to-end.
+
+---
+
 ## Stage 2 verification additions (for Stage 2E)
 
 Reminder for the Stage 2E lifecycle pass — these are tests, not changes to
