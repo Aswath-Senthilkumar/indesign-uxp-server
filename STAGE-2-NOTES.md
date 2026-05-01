@@ -556,6 +556,43 @@ problem for our use case but informs the lifecycle test interpretation.
 only via panel status text and DevTools WS-error log entries. No data loss
 because no requests were in flight (Test 4 covers in-flight kill).
 
+### Test 2 — Plugin reload while bridge running
+
+**Goal:** verify graceful WebSocket close from the plugin side, and that
+the reloaded plugin instance reconnects cleanly.
+
+**Method.** Human clicked **Reload** on the Bridge plugin in UXP Developer
+Tool while the bridge was running. Bridge log was the only instrumented
+observation point on the shell side.
+
+**Bridge log delta:**
+
+```
+[Bridge] Plugin connected         (from Test 1's reconnect)
+[Bridge] Plugin disconnected      ← UXP DT cleanly closed the WS
+[Bridge] Plugin connected         ← reloaded plugin's panel.show fired
+```
+
+**Plugin-side observation (confirmed by human):** "panel refreshed with
+connected message" — i.e., status `<p>` reset (briefly `Initializing...`
+per [plugin/index.html:5](plugin/index.html#L5), then `Connected to
+bridge ✓`).
+
+**Why this matters vs Test 1.** Test 1 killed the *bridge* with
+`taskkill /F`, so the bridge process died before any logging code ran —
+no disconnect line appeared on the bridge side. Test 2 cycles the
+*plugin* via UXP DT's Reload, which is a graceful WebView teardown:
+the plugin's WebSocket fires `onclose` cleanly, the bridge receives the
+close event, runs `ws.on('close')`
+([bridge/server.js:130-144](bridge/server.js#L130-L144)), logs
+**`[Bridge] Plugin disconnected`**, sets `pluginSocket = null`, and
+rejects any pending entries.
+
+`/status` after reload: `{"connected":true,"queueDepth":0}` HTTP 200.
+
+**Status: pass.** Graceful disconnect + reconnect path is exercised and
+matches the bridge code's intent.
+
 ---
 
 ## Stage 2 verification additions (for Stage 2E)
