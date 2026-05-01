@@ -812,6 +812,102 @@ sample missed that window.
 **Status: pass.** UUID correlation, serial queue exclusivity, and
 no-cross-contamination all confirmed.
 
+### Test 6 — Concurrent render-shaped sequences
+
+**Goal:** verify the serial queue + correlation guarantee using
+multi-step async sequences resembling actual render workloads (multiple
+DOM reads + `setTimeout` awaits inside one `/execute` script), rather
+than trivial `1 + 1`-shaped tests.
+
+**Method.** Two concurrent calls (caller A, caller B), each running:
+
+```js
+const t0 = Date.now();
+const seen = [];
+seen.push(["start", Date.now() - t0]);
+seen.push(["docs", app.documents.length, Date.now() - t0]);
+await new Promise(r => setTimeout(r, 50));
+seen.push(["after-50ms", Date.now() - t0]);
+seen.push(["version", app.version, Date.now() - t0]);
+await new Promise(r => setTimeout(r, 50));
+seen.push(["end", Date.now() - t0]);
+return { caller: "A"|"B", t0Ts: t0, totalMs: Date.now() - t0, steps: seen };
+```
+
+JSON request bodies built via Node (`JSON.stringify`) to avoid the shell
+escaping landmines that bricked the first attempt.
+
+**Results (both HTTP 200):**
+
+```
+A: {caller:"A", t0Ts:1777607781623, totalMs:154,
+    steps:[["start",0],["docs",0,14],["after-50ms",77],["version","21.3.0.60",91],["end",154]]}
+B: {caller:"B", t0Ts:1777607781780, totalMs:120,
+    steps:[["start",0],["docs",0,2],["after-50ms",58],["version","21.3.0.60",59],["end",120]]}
+```
+
+**Key evidence — A and B's plugin-side time spans do not overlap:**
+
+```
+A:    t0=781623 ─────────── end=781777
+                               (gap: 3 ms)
+B:                          t0=781780 ──────── end=781900
+```
+
+`A.end` (781777) precedes `B.start` (781780) by 3 ms. The bridge held
+B's request in the queue until A returned, then dispatched B. This is
+the strongest available evidence that the serial-queue invariant
+(`bridge/server.js:34-95`) protects against concurrent UXP DOM
+mutation.
+
+**Multi-step state did not cross-contaminate.** A's `steps` array and
+B's `steps` array each contain only their own measurements; no entries
+from the other render leaked in. Each `new Function('app', code)` call
+runs in its own closure scope at the plugin.
+
+**Curl timings:**
+
+| | curl `TIME` | Plugin `totalMs` | Overhead/wait |
+|---|---|---|---|
+| A | 161 ms | 154 ms | 7 ms (HTTP+WS round trip) |
+| B | 271 ms | 120 ms | 151 ms (mostly waiting on A) |
+
+B's 151 ms overhead is roughly the time it spent waiting in the bridge
+queue while A executed. The math (`7 + 154 + ~110 ≈ 271`) is consistent.
+
+**Wall-clock burst total:** ~414 ms for two ~140 ms renders sequenced
+— exactly what serial queueing predicts (sum of per-render times +
+bursting overhead).
+
+**Bridge log shows the same strict pattern as Test 5:**
+
+```
+Sending execute: 154b...   (caller A)
+From plugin:    154b...    "caller":"A"
+Sending execute: 2ea1...   (caller B)
+From plugin:    2ea1...    "caller":"B"
+```
+
+**Implication for Stage 4 dashboard.** Concurrent render submissions
+are safe — the bridge serializes them — but each caller's wall-clock
+latency stretches with how many other renders are queued ahead. The
+dashboard should probably surface "you're #N in queue" feedback, or at
+least not lie about latency for the second-and-beyond submission.
+
+**Status: pass.** Serial queue exclusivity holds for realistic
+multi-step workloads, no cross-contamination of multi-step state, and
+queue-wait latency behaves predictably.
+
+---
+
+### First attempt failure note (informational)
+
+The first attempt at Test 6 used inline shell-quoted JSON bodies that
+shell-mangled into invalid JSON. The bridge correctly rejected both
+with HTTP 400 + a body-parser SyntaxError, did not crash, kept the
+queue at 0, and the plugin was never reached. Bonus evidence: the
+bridge handles malformed input cleanly.
+
 ---
 
 ## Stage 2 verification additions (for Stage 2E)
