@@ -229,4 +229,28 @@ Render produced PDF at `2026-05-01 15:28` local time.
 Doc was left open in InDesign for Stage 3.5 inspection. The PDF is at
 `output/test-render.pdf` (gitignored — see decision in 3.6).
 
+---
+
+## Stage 3.5 — Visual verification
+
+The user opened `output/test-render.pdf` and compared it against
+expectations.
+
+**Verbatim report:**
+
+> "Compared everything and the swap looks clean."
+
+That is, all four populated fields (`tile_1_address`, `tile_1_city_state`,
+`tile_1_sf_ac`, `tile_1_photo`) rendered correctly with no visible
+issues. Photo fit (`FitOptions.fillProportionally`) produced the
+expected aerial framing — no letterboxing, no stretching reported. Other
+tiles and the background design were untouched.
+
+No formatting concerns reported about the `±17,799 SF | ±133.00 AC`
+line either — the user-confirmed legitimate `133` acreage rendered as
+`133.00 AC` per the prompt's "to 2 decimal places" instruction, and the
+user accepted it as-is.
+
+Stage 3.5 — pass.
+
 
