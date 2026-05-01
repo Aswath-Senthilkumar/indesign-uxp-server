@@ -5,21 +5,9 @@
 
 export const utilityToolDefinitions = [
     // =================== UTILITY TOOLS ===================
-    {
-        name: 'execute_indesign_code',
-        description: 'Execute arbitrary JavaScript code in the InDesign UXP context. WARNING: this runs with full InDesign DOM access and can create, modify, or destroy documents. Use only as a last resort when no other tool covers the operation.',
-        inputSchema: {
-            type: 'object',
-            properties: {
-                code: { type: 'string', description: 'JavaScript code to execute in UXP context. Has access to `app` (InDesign application object).' },
-                dangerousConfirmation: {
-                    type: 'string',
-                    description: 'Must be exactly: "I understand this executes arbitrary InDesign code"',
-                },
-            },
-            required: ['code', 'dangerousConfirmation'],
-        },
-    },
+    // SAFETY: execute_indesign_code is disabled — see pre-stage-2-prompt.md Block 2.
+    // The tool definition is removed from this array so the MCP server does not advertise
+    // it to clients. Re-enabling requires an explicit security review.
     {
         name: 'view_document',
         description: 'View document information and current state',

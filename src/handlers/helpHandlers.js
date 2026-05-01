@@ -40,8 +40,9 @@ export class HelpHandlers {
         },
         export: {
             name: 'Export & Utilities',
-            description: 'Export documents and run custom code',
-            tools: ['export_pdf', 'export_images', 'execute_indesign_code']
+            description: 'Export documents',
+            // execute_indesign_code removed per pre-stage-2-prompt.md Block 2.
+            tools: ['export_pdf', 'export_images']
         }
     };
 

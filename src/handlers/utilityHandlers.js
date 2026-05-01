@@ -10,22 +10,13 @@ export class UtilityHandlers {
      * Execute custom InDesign code via UXP
      */
     static async executeInDesignCode(args) {
-        const { code, dangerousConfirmation } = args;
-
-        if (dangerousConfirmation !== 'I understand this executes arbitrary InDesign code') {
-            return formatErrorResponse(
-                'execute_indesign_code requires dangerousConfirmation: "I understand this executes arbitrary InDesign code"',
-                "Execute InDesign Code"
-            );
-        }
-
-        // Pass user code directly through to UXP — it runs async with app in scope
-        const result = await ScriptExecutor.executeViaUXP(code);
-        // M5: respect { success: false, error } returned by user code instead of wrapping as success
-        if (result && typeof result === 'object' && result.success === false) {
-            return formatErrorResponse(result.error || 'Script returned failure', "Execute InDesign Code");
-        }
-        return formatResponse(result, "Execute InDesign Code");
+        // SAFETY: disabled per pre-stage-2-prompt.md Block 2. The router no longer dispatches
+        // here and the tool definition is removed; this guard is belt-and-braces in case a
+        // future change re-wires it without revisiting the security review.
+        return formatErrorResponse(
+            'execute_indesign_code is disabled. Re-enabling requires a security review (see pre-stage-2-prompt.md Block 2).',
+            "Execute InDesign Code"
+        );
     }
 
     /**

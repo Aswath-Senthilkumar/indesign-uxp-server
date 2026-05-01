@@ -216,7 +216,11 @@ export class InDesignMCPServer {
             case 'set_group_properties': return await GroupHandlers.setGroupProperties(args);
 
             // Utility Functions
-            case 'execute_indesign_code': return await UtilityHandlers.executeInDesignCode(args);
+            // SAFETY: execute_indesign_code is disabled — see pre-stage-2-prompt.md Block 2.
+            // It allowed any caller (the MCP client) to run arbitrary InDesign DOM code via the
+            // bridge's eval-string protocol. The structural risk lives in the bridge; this is
+            // the easy half of the mitigation. Re-enabling it requires an explicit security review.
+            // case 'execute_indesign_code': return await UtilityHandlers.executeInDesignCode(args);
             case 'view_document': return await UtilityHandlers.viewDocument();
             case 'get_session_info': return await UtilityHandlers.getSessionInfo();
             case 'clear_session': return await UtilityHandlers.clearSession();
