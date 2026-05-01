@@ -593,6 +593,73 @@ rejects any pending entries.
 **Status: pass.** Graceful disconnect + reconnect path is exercised and
 matches the bridge code's intent.
 
+### Test 3 — InDesign force-quit during in-flight request
+
+**Goal:** verify the bridge's behaviour when the plugin disappears
+mid-flight (between `Sending execute` and `From plugin`). Code path of
+interest: [bridge/server.js:130-144](bridge/server.js#L130-L144), the
+`ws.on('close')` handler that should reject pending entries with
+"Plugin disconnected".
+
+**Method.** Two attempts:
+
+1. *First attempt* — 20 s setTimeout in the executed code, no force-quit
+   happened in time. Curl returned `{"result":"late"}` cleanly at 20.09 s.
+   Useful side observation: the bridge correctly held a 20 s request
+   without hitting its 30 s safety timeout.
+2. *Second attempt* — 60 s setTimeout in the executed code, human pre-
+   staged Task Manager and force-quit InDesign during the wait. This is
+   the run we record below.
+
+**Result of attempt 2 (the real one):**
+
+| | |
+|---|---|
+| Curl response | `{"error":"Execution timed out after 30s"}` HTTP 500 |
+| Curl elapsed | 30.020 s |
+| Bridge log lines added | `[Bridge] Sending execute: 47383037-…`<br>`[Bridge] Plugin disconnected` |
+| `/status` after | `{"connected":false,"queueDepth":0}` HTTP 200 |
+| `tasklist \| grep -i indesign` after | empty (force-quit succeeded) |
+
+**Key finding — race between two cleanup paths.**
+
+The bridge has *two* mechanisms that should reject a pending HTTP caller:
+
+1. **30 s timer** at [bridge/server.js:56-61](bridge/server.js#L56-L61) —
+   rejects with `"Execution timed out after 30s"`.
+2. **`ws.on('close')` handler** at [bridge/server.js:130-144](bridge/server.js#L130-L144) —
+   rejects with `"Plugin disconnected"` and clears any pending entry.
+
+On a Windows Task Manager force-quit, the OS doesn't always send a clean
+TCP FIN — the bridge's WebSocket can wait many seconds before its
+`onclose` event fires. The 30 s timer raced the close event and won, so
+the caller saw the timeout error rather than the disconnect error.
+Eventually the close event did surface (visible in the bridge log) and
+`/status` correctly reports `connected:false`, but by then curl had
+already returned.
+
+**Implications for Stage 4 dashboard design.** The user-facing error on
+hard plugin death is `"Execution timed out after 30s"`, not
+`"Plugin disconnected"`. Two consequences:
+
+- The dashboard cannot distinguish "InDesign is genuinely slow" from
+  "InDesign died" by error string alone after a 30 s timeout.
+- Recommended pattern: on a 30 s timeout, the caller should also poll
+  `GET /status`. If `connected:false`, surface a "plugin died" message;
+  otherwise surface a "still working" / "operation slow" message and let
+  the user retry.
+
+**Status: partial pass.** The in-flight rejection path is correct and
+*runs* (we can see it in the bridge log), but on Windows force-quit it
+loses a race to the safety timeout. The caller still gets a clean
+HTTP 500 within bounded time and the bridge state recovers. Behaviour
+is documented; no code change required for Stage 2.
+
+After test: human re-launched InDesign and reloaded the plugin via UXP
+Developer Tool (UXP DT side-loads don't survive InDesign restarts —
+`Add Plugin` persists, but `Load` does not). `/status` returned
+`{"connected":true,"queueDepth":0}` once the panel reopened.
+
 ---
 
 ## Stage 2 verification additions (for Stage 2E)
