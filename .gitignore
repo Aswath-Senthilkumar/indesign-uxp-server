@@ -73,6 +73,7 @@ pids
 # Test artifacts
 test-*.js
 !tests/test-*.js
+!test-render.js
 
 # Temporary test directories
 test-images/
