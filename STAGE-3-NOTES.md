@@ -41,3 +41,56 @@ ls -la templates/template-v2-test.indd
 ```
 
 Size = 6,828,032 bytes (~6.5 MB). Above the 100 KB sanity threshold by ~70×.
+
+---
+
+## Stage 3.2 — Frame verification (smoke test)
+
+Bridge was confirmed live (`/status` → `{connected:true, queueDepth:0}`)
+and `template-v2-test.indd` was the only open and active document
+(`{active:"template-v2-test.indd", openCount:1}`). The user started the
+bridge and reloaded the plugin themselves after Stage 2F's clean teardown.
+
+### Probe
+
+```js
+const doc = app.activeDocument;
+const names = ["tile_1_photo", "tile_1_address", "tile_1_city_state", "tile_1_sf_ac"];
+const result = {};
+for (const n of names) {
+  const t = doc.textFrames.itemByName(n);
+  const r = doc.rectangles.itemByName(n);
+  result[n] = { text: t.isValid, rectangle: r.isValid };
+}
+return { document: doc.name, frames: result };
+```
+
+### Response
+
+```json
+{
+  "result": {
+    "document": "template-v2-test.indd",
+    "frames": {
+      "tile_1_photo":      { "text": false, "rectangle": true  },
+      "tile_1_address":    { "text": true,  "rectangle": false },
+      "tile_1_city_state": { "text": true,  "rectangle": false },
+      "tile_1_sf_ac":      { "text": true,  "rectangle": false }
+    }
+  }
+}
+```
+
+### Verdict
+
+All four frames resolve cleanly with the **expected** type assignment:
+
+| Frame | Expected | Got |
+|---|---|---|
+| `tile_1_photo` | rectangle only | rectangle only ✓ |
+| `tile_1_address` | text frame only | text frame only ✓ |
+| `tile_1_city_state` | text frame only | text frame only ✓ |
+| `tile_1_sf_ac` | text frame only | text frame only ✓ |
+
+`document` field matches the expected file name. No name typos, no
+type mismatches, no missing frames. Stage 3.2 — pass.
