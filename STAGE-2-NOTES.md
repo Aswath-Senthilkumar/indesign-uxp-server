@@ -908,6 +908,68 @@ with HTTP 400 + a body-parser SyntaxError, did not crash, kept the
 queue at 0, and the plugin was never reached. Bonus evidence: the
 bridge handles malformed input cleanly.
 
+### Test 7 — Disconnect UX
+
+**Goal:** describe what an end user actually sees in the panel when the
+bridge is down. Stage 4 dashboard design depends on knowing whether the
+current plugin UI gives users enough information to act, or whether we
+need to add elements.
+
+**Method.** Killed bridge, held down for 20 s with no further action,
+asked human to observe and describe. Bridge dead at 20:59:59.941 with
+`taskkill /F`; restarted at ~21:00:23 once the human had described.
+
+**Human observation (verbatim):** "once disconnected, wording stays in
+'Disconnected — retrying in 3s', no clickable elements, no spinners,
+no decrease in timer, just that, no hang or something."
+
+**Mapped to plugin code:**
+
+- Status text: set once in `ws.onclose`
+  ([plugin/index.js:62-65](plugin/index.js#L62-L65)) to the literal
+  string `"Disconnected — retrying in 3s"`. Never updated until the
+  next reconnect attempt resolves (either `onopen` → "Connected to
+  bridge ✓" or `onerror` → "Bridge connection error").
+- The "3s" in the message is **hardcoded**, not bound to the actual
+  countdown. The reconnect timer fires every 3 s, but the user has no
+  visibility into when the next attempt will happen.
+- The panel has zero interactive controls
+  ([plugin/index.html](plugin/index.html) is just a single `<p>`).
+  Nothing to click means nothing can hang on a dead connection — that
+  property is structural, not earned.
+
+**Status: pass for "doesn't break".** UX, however, is **threadbare**
+and inadequate for non-technical users:
+
+- A static "retrying in 3s" message can't distinguish "plugin is still
+  trying" from "plugin has given up" or "plugin froze". The user has
+  no liveness indicator.
+- No manual reconnect / "try again" affordance. If a user wanted to
+  force a reconnect (e.g. they just relaunched the bridge themselves
+  and don't want to wait up to 3 s), they can't.
+- No diagnostic information surfaced (last error, retry count, time
+  since last successful connection). DevTools has it; the panel
+  doesn't.
+- No visual change beyond the text — no color shift, no spinner, no
+  iconography.
+
+**Implications for Stage 4 dashboard.** The dashboard sits *between*
+the user and this plugin/bridge stack. Treat the plugin's panel as a
+debug aid for developers, not as the user-facing surface. The
+dashboard must:
+
+1. Surface its *own* connection-health indicator (poll
+   `GET /status` periodically; show a clear connected/disconnected
+   state with an unambiguous timestamp).
+2. Show queue depth + ETA for in-flight renders, not rely on the
+   plugin to do this.
+3. Provide a "retry" affordance for failed renders that includes a
+   bridge health check rather than just resubmitting blindly.
+
+**Status: pass.** Behaviour is correct and consistent with the code;
+the UX gap is real but expected — Stage 2's job was to verify the
+substrate, not to ship a UI.
+
 ---
 
 ## Stage 2 verification additions (for Stage 2E)
