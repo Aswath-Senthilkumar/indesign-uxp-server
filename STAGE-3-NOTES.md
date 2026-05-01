@@ -111,6 +111,136 @@ Tag: `stage-3-complete` at the wrap-up commit `e2ed837`. **Pushed to
 
 ---
 
+## Stage 3.7 — Batched multi-tile render
+
+### Goal
+
+Replace Stage 3.4's per-call-per-operation pattern with a single
+`/execute` call that drives all tile populates + one PDF export. The
+substrate sees one `new Function('app', code)` compile, one HTTP
+round-trip, and one undo step covering the whole render. This is the
+shape master-app will use in Stage 4 (one render request from caller
+→ one bridge call → atomic completion or atomic failure).
+
+### Script changes
+
+`test-render.js` rewritten:
+
+- New `--ids <a,b,c>` flag — comma-separated explicit selection.
+- Default behaviour: take the first 6 entries from `mock-data/comps.json`.
+- Existing `--id <x>` retained for single-tile rendering (Stage 3.4
+  back-compat).
+- Tiles array (with absolute image paths and pre-formatted text)
+  serialised once into the bridge code via `JSON.stringify`. The
+  in-plugin loop iterates that array, no string concatenation across
+  tile-N markers.
+- Result includes per-tile timings (`tileTimes[]`), `populateMs`,
+  `exportMs`, and `totalMs` — measured inside the plugin so the
+  caller-side wall-clock reading captures only HTTP+WS overhead on
+  top.
+
+### Run (default = first 6 comps)
+
+```
+$ node test-render.js
+Bridge:   http://127.0.0.1:3000  connected=true
+Output:   E:\TAI\indesign-uxp-server\output\test-render.pdf
+Tiles (6):
+  tile_1  mock-1  1325 E Elwood St, Phoenix, AZ        ±7,500 SF | ±1.14 AC   (204 KB)
+  tile_2  mock-2  1701 E Elwood St, Phoenix, AZ        ±5,100 SF | ±1.23 AC   (213 KB)
+  tile_3  mock-3  3635 S 43rd Ave, Phoenix, AZ        ±17,799 SF | ±133.00 AC (173 KB)
+  tile_4  mock-4  411 S 33rd Ave, Phoenix, AZ         ±18,568 SF | ±2.64 AC   (179 KB)
+  tile_5  mock-5  4714 N 43rd Ave, Phoenix, AZ         ±8,040 SF | ±2.91 AC   (183 KB)
+  tile_6  mock-6  6271 W Morten Ave, Glendale, AZ      ±6,300 SF | ±1.13 AC   (185 KB)
+
+Per-tile (in plugin):
+  tile_1: 495 ms
+  tile_2: 226 ms
+  tile_3: 236 ms
+  tile_4: 217 ms
+  tile_5: 161 ms
+  tile_6: 135 ms
+  sum:        1470 ms
+
+Populate (in plugin):  1470 ms
+Export   (in plugin):  1126 ms
+Plugin total:          2596 ms
+Wall clock (caller):   2635 ms
+HTTP+WS overhead:      39 ms
+
+PDF: E:\TAI\indesign-uxp-server\output\test-render.pdf  (267.0 KB)
+```
+
+### Latency analysis
+
+| Run | Tiles | HTTP round-trips | Populate | Export | Total |
+|---|---|---|---|---|---|
+| Stage 3.4 baseline | 1 | 6 | 743 ms | 6,459 ms | 7,268 ms |
+| Stage 3.7 batched | 6 | 1 | 1,470 ms | 1,126 ms | 2,635 ms |
+
+**Headline:** the 6-tile batched render finishes in 2.6 s — 2.75× faster
+than the 1-tile per-call-per-op render despite doing 6× the populate
+work.
+
+**Two effects compose:**
+
+1. **Round-trip elimination on populate.** Stage 3.4 paid an HTTP+WS
+   round-trip for every operation (6 trips for 1 tile). Stage 3.7 pays
+   one. Per-tile populate cost dropped from ~140 ms (≈ a single
+   round-trip's overhead) to a steady-state ~135-225 ms in the
+   plugin — and tile_1's cold-start 495 ms is the JIT compile of the
+   batched script + the first `place()` call's font/image cache warmup.
+   Naive scaling for 6 tiles per-call-per-op would have been
+   `6 × 743 = 4,458 ms` of populate vs the batched 1,470 ms — **3×
+   faster on populate alone**.
+
+2. **Export speed-up looks dramatic but is partly session warmup.** The
+   export step shrank from 6,459 ms (Stage 3.4, first export of the
+   session) to 1,126 ms (Stage 3.7, second export of the same InDesign
+   instance after intervening test runs). InDesign caches font subsets,
+   colour profiles, and various PDF-engine state across exports in a
+   session, so first-of-session is much slower than subsequent. **Do
+   not credit this 5.7× to batching.** A cold-start re-run would
+   probably show the export back near 6 s.
+
+### Per-tile decay
+
+```
+tile_1  495 ms   (cold — JIT compile + first place() warmup)
+tile_2  226 ms
+tile_3  236 ms
+tile_4  217 ms
+tile_5  161 ms
+tile_6  135 ms
+```
+
+After tile_1 the plugin steady-state is ~150-225 ms per tile (text
+sets + image place + fit). Extrapolation to 12 tiles:
+
+```
+~500 ms (tile_1 cold) + 11 × ~190 ms = ~2.6 s populate
++ ~1.1-6.5 s export (depending on session state)
+≈ 4-9 s total for a 12-tile sheet
+```
+
+Comfortably under the 30 s ceiling and well below master-app's
+realistic UX budget for "click render, see preview".
+
+### Output
+
+PDF produced at `output/test-render.pdf` (267 KB). Document left open
+in InDesign so it can be inspected before the next render overwrites
+it. **Visual verification is optional** for Stage 3.7 — Stage 3.5
+already validated the per-tile rendering visually for the same
+template; the change here is purely the call shape, not the rendering
+output.
+
+### Tag
+
+`stage-3.7-complete` at this commit.
+
+---
+
 ## Prerequisites — verified at start
 
 - `STAGE-2-NOTES.md` exists at repo root

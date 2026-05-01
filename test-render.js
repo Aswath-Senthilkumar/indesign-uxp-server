@@ -1,24 +1,32 @@
 #!/usr/bin/env node
 /**
- * Stage 3.4 — first end-to-end render through Hannah's template.
+ * Stage 3.4 / 3.7 render script.
  *
- * Reads mock-data/comps.json, populates the four named frames in tile 1
- * of templates/template-v2-test.indd, and exports to output/test-render.pdf.
+ * Reads mock-data/comps.json, populates N tiles (1..N) of
+ * templates/template-v2-test.indd, and exports one PDF.
+ *
+ * Stage 3.7 change vs 3.4: the entire populate-and-export sequence is
+ * now sent as a single /execute call rather than one POST per
+ * operation. This trims HTTP+WebSocket round-trip overhead and lets the
+ * plugin batch all DOM mutations under a single new Function(...)
+ * compile. The substrate sees one undo step covering the whole render
+ * (per the bridge's serial-queue invariant), which also matches our
+ * "render is atomic from the user's POV" intent.
  *
  * Usage:
- *   node test-render.js              # uses comps[0]
- *   node test-render.js --id mock-3  # uses comp with id="mock-3"
+ *   node test-render.js                    # first 6 comps -> tiles 1..6
+ *   node test-render.js --id mock-3        # one tile (tile_1 = mock-3)
+ *   node test-render.js --ids mock-2,mock-7  # N tiles in given order
  *
- * Pre-flight checks happen locally before any bridge call. The script does
- * NOT close the document at the end — InDesign keeps it open for visual
- * inspection in Stage 3.5.
+ * Pre-flight: comp + image existence + bridge connection are checked
+ * locally before the bridge call.
  *
- * Note on path safety: the bridge's POST /execute endpoint forwards code
- * strings verbatim to the plugin without path validation. The path
- * validator added in Stage 1.5 lives in src/handlers/, which we are not
- * going through. We resolve paths to absolute via path.resolve() and
- * pre-check existence locally — defense in depth, but the only true
- * boundary here is InDesign's process-level file permissions.
+ * Note on path safety: the bridge's POST /execute endpoint forwards
+ * code strings to the plugin verbatim and does NOT run the path
+ * validator added in Stage 1.5. INDESIGN_ALLOWED_ROOTS does not gate
+ * this script. We resolve to absolute and pre-check existence as
+ * defense-in-depth, but the only true boundary is InDesign's
+ * process-level file permissions.
  */
 
 import { readFileSync, mkdirSync, statSync } from 'node:fs';
@@ -32,11 +40,13 @@ const TEMPLATE_NAME = 'template-v2-test.indd';
 const OUTPUT_PDF_REL = 'output/test-render.pdf';
 const COMPS_PATH_REL = 'mock-data/comps.json';
 const IMAGES_DIR_REL = 'mock-data/images';
+const MAX_TILES = 6;
 
 function parseArgs(argv) {
-    const out = { id: null };
+    const out = { id: null, ids: null };
     for (let i = 2; i < argv.length; i++) {
         if (argv[i] === '--id') out.id = argv[++i];
+        else if (argv[i] === '--ids') out.ids = argv[++i];
     }
     return out;
 }
@@ -59,18 +69,7 @@ async function execute(code) {
         err.httpStatus = r.status;
         throw err;
     }
-    if (body.result && typeof body.result === 'object' && body.result.success === false) {
-        throw new Error(`plugin returned failure: ${body.result.error || JSON.stringify(body.result)}`);
-    }
     return body.result;
-}
-
-async function step(name, code) {
-    const t0 = Date.now();
-    const result = await execute(code);
-    const ms = Date.now() - t0;
-    console.log(`  [${String(ms).padStart(5)} ms] ${name}`);
-    return { result, ms };
 }
 
 function formatSfAc(building_sf, land_area) {
@@ -79,9 +78,24 @@ function formatSfAc(building_sf, land_area) {
     return `±${sf} SF | ±${ac} AC`;
 }
 
-// JS literal helper — embed JS-string literal in the code we send to the bridge.
-// Using JSON.stringify gives us a properly-quoted JS string literal for any UTF-8 input.
 const lit = (s) => JSON.stringify(s);
+
+function selectComps(comps, args) {
+    if (args.ids) {
+        const wanted = args.ids.split(',').map(s => s.trim()).filter(Boolean);
+        return wanted.map(id => {
+            const c = comps.find(x => x.id === id);
+            if (!c) throw new Error(`no comp with id="${id}" in comps.json`);
+            return c;
+        });
+    }
+    if (args.id) {
+        const c = comps.find(x => x.id === args.id);
+        if (!c) throw new Error(`no comp with id="${args.id}" in comps.json`);
+        return [c];
+    }
+    return comps.slice(0, MAX_TILES);
+}
 
 async function main() {
     const args = parseArgs(process.argv);
@@ -98,18 +112,31 @@ async function main() {
         throw new Error(`${compsPath} has no entries`);
     }
 
-    const comp = args.id
-        ? comps.find(c => c.id === args.id)
-        : comps[0];
-    if (!comp) {
-        throw new Error(`no comp with id="${args.id}" in ${compsPath}`);
+    let selected = selectComps(comps, args);
+    if (selected.length === 0) throw new Error('no comps selected');
+    if (selected.length > MAX_TILES) {
+        console.warn(`warning: ${selected.length} comps requested, only first ${MAX_TILES} will be rendered (template has 6 tiles)`);
+        selected = selected.slice(0, MAX_TILES);
     }
 
-    const imagePath = resolve(__dirname, IMAGES_DIR_REL, comp.image_filename);
-    let imgStat;
-    try { imgStat = statSync(imagePath); }
-    catch { throw new Error(`image not found: ${imagePath}`); }
-    if (imgStat.size < 10 * 1024) throw new Error(`image suspiciously small (${imgStat.size} B): ${imagePath}`);
+    // Build per-tile data with absolute image paths and pre-formatted strings.
+    const tiles = selected.map((comp, i) => {
+        const image = resolve(__dirname, IMAGES_DIR_REL, comp.image_filename);
+        let imgStat;
+        try { imgStat = statSync(image); }
+        catch { throw new Error(`image not found for ${comp.id}: ${image}`); }
+        if (imgStat.size < 10 * 1024) throw new Error(`image suspiciously small (${imgStat.size} B): ${image}`);
+
+        return {
+            n: i + 1,
+            id: comp.id,
+            address: comp.address,
+            city_state: `${comp.city}, ${comp.state}`,
+            sf_ac: formatSfAc(comp.building_sf, comp.land_area),
+            image,
+            imageSizeKB: imgStat.size / 1024,
+        };
+    });
 
     const outputPdf = resolve(__dirname, OUTPUT_PDF_REL);
     mkdirSync(dirname(outputPdf), { recursive: true });
@@ -118,99 +145,107 @@ async function main() {
     if (!status.connected) throw new Error('bridge says plugin not connected — open InDesign + Bridge Panel');
 
     // === log selection ===
-    console.log(`Comp:     ${comp.id}  ${comp.address}, ${comp.city}, ${comp.state}`);
-    console.log(`Image:    ${imagePath}  (${(imgStat.size / 1024).toFixed(1)} KB)`);
-    console.log(`Output:   ${outputPdf}`);
     console.log(`Bridge:   ${BRIDGE_URL}  connected=${status.connected}`);
+    console.log(`Output:   ${outputPdf}`);
+    console.log(`Tiles (${tiles.length}):`);
+    for (const t of tiles) {
+        console.log(`  tile_${t.n}  ${t.id}  ${t.address}, ${t.city_state}  ${t.sf_ac}  (${t.imageSizeKB.toFixed(0)} KB)`);
+    }
     console.log('');
 
-    const tStart = Date.now();
+    // Tiles serialized into the in-plugin code as a JS literal.
+    // We strip caller-side metadata (id, imageSizeKB) since the plugin doesn't need them.
+    const pluginTiles = tiles.map(t => ({
+        n: t.n,
+        address: t.address,
+        city_state: t.city_state,
+        sf_ac: t.sf_ac,
+        image: t.image,
+    }));
 
-    // === step 1: confirm active document ===
-    await step('confirm active document is template-v2-test.indd', `
+    const code = `
+        const { FitOptions, ExportFormat } = require('indesign');
         const doc = app.activeDocument;
         if (!doc) return { ok: false, error: 'no active document' };
         if (doc.name !== ${lit(TEMPLATE_NAME)}) {
             return { ok: false, error: 'wrong active document: ' + doc.name };
         }
-        return { ok: true, name: doc.name };
-    `).then(({ result }) => {
-        if (!result || !result.ok) throw new Error(result?.error || 'document check failed');
-    });
 
-    // === step 2: set tile_1_address ===
-    await step(`set tile_1_address = ${JSON.stringify(comp.address)}`, `
-        const doc = app.activeDocument;
-        const f = doc.textFrames.itemByName('tile_1_address');
-        if (!f.isValid) return { ok: false, error: 'tile_1_address not found' };
-        f.contents = ${lit(comp.address)};
-        return { ok: true };
-    `).then(({ result }) => {
-        if (!result || !result.ok) throw new Error(result?.error || 'tile_1_address set failed');
-    });
+        const tiles = ${JSON.stringify(pluginTiles)};
+        const t0 = Date.now();
+        const tileTimes = [];
 
-    // === step 3: set tile_1_city_state ===
-    const cityState = `${comp.city}, ${comp.state}`;
-    await step(`set tile_1_city_state = ${JSON.stringify(cityState)}`, `
-        const doc = app.activeDocument;
-        const f = doc.textFrames.itemByName('tile_1_city_state');
-        if (!f.isValid) return { ok: false, error: 'tile_1_city_state not found' };
-        f.contents = ${lit(cityState)};
-        return { ok: true };
-    `).then(({ result }) => {
-        if (!result || !result.ok) throw new Error(result?.error || 'tile_1_city_state set failed');
-    });
+        for (const t of tiles) {
+            const tStart = Date.now();
+            const prefix = 'tile_' + t.n + '_';
 
-    // === step 4: set tile_1_sf_ac ===
-    const sfAc = formatSfAc(comp.building_sf, comp.land_area);
-    await step(`set tile_1_sf_ac = ${JSON.stringify(sfAc)}`, `
-        const doc = app.activeDocument;
-        const f = doc.textFrames.itemByName('tile_1_sf_ac');
-        if (!f.isValid) return { ok: false, error: 'tile_1_sf_ac not found' };
-        f.contents = ${lit(sfAc)};
-        return { ok: true };
-    `).then(({ result }) => {
-        if (!result || !result.ok) throw new Error(result?.error || 'tile_1_sf_ac set failed');
-    });
+            const fa = doc.textFrames.itemByName(prefix + 'address');
+            if (!fa.isValid) return { ok: false, error: prefix + 'address not found' };
+            fa.contents = t.address;
 
-    // === step 5: place image into tile_1_photo with FILL_PROPORTIONALLY ===
-    await step(`place image into tile_1_photo (FILL_PROPORTIONALLY)`, `
-        const { FitOptions } = require('indesign');
-        const doc = app.activeDocument;
-        const r = doc.rectangles.itemByName('tile_1_photo');
-        if (!r.isValid) return { ok: false, error: 'tile_1_photo not found' };
-        try { r.place(${lit(imagePath)}); }
-        catch (e) { return { ok: false, error: 'place failed: ' + (e.message || String(e)) }; }
-        try { r.fit(FitOptions.fillProportionally); }
-        catch (e) { return { ok: false, error: 'fit failed: ' + (e.message || String(e)) }; }
-        return { ok: true };
-    `).then(({ result }) => {
-        if (!result || !result.ok) throw new Error(result?.error || 'place/fit failed');
-    });
+            const fc = doc.textFrames.itemByName(prefix + 'city_state');
+            if (!fc.isValid) return { ok: false, error: prefix + 'city_state not found' };
+            fc.contents = t.city_state;
 
-    // === step 6: export PDF ===
-    await step(`export PDF -> ${OUTPUT_PDF_REL}`, `
-        const { ExportFormat } = require('indesign');
-        const doc = app.activeDocument;
+            const fs = doc.textFrames.itemByName(prefix + 'sf_ac');
+            if (!fs.isValid) return { ok: false, error: prefix + 'sf_ac not found' };
+            fs.contents = t.sf_ac;
+
+            const rect = doc.rectangles.itemByName(prefix + 'photo');
+            if (!rect.isValid) return { ok: false, error: prefix + 'photo not found' };
+            try { rect.place(t.image); }
+            catch (e) { return { ok: false, error: 'place failed for tile ' + t.n + ': ' + (e.message || String(e)) }; }
+            try { rect.fit(FitOptions.fillProportionally); }
+            catch (e) { return { ok: false, error: 'fit failed for tile ' + t.n + ': ' + (e.message || String(e)) }; }
+
+            tileTimes.push({ n: t.n, ms: Date.now() - tStart });
+        }
+
+        const populateMs = Date.now() - t0;
+        const exportStart = Date.now();
         try {
             await doc.exportFile(ExportFormat.pdfType, ${lit(outputPdf)}, false);
-            return { ok: true };
         } catch (e) {
             return { ok: false, error: 'export failed: ' + (e.message || String(e)) };
         }
-    `).then(({ result }) => {
-        if (!result || !result.ok) throw new Error(result?.error || 'export failed');
-    });
+        const exportMs = Date.now() - exportStart;
 
-    // === verify PDF on disk ===
+        return {
+            ok: true,
+            populateMs,
+            exportMs,
+            totalMs: Date.now() - t0,
+            tileTimes
+        };
+    `;
+
+    const callStart = Date.now();
+    const result = await execute(code);
+    const wallMs = Date.now() - callStart;
+
+    if (!result || !result.ok) {
+        throw new Error(result?.error || 'render returned no result');
+    }
+
     let pdfStat;
     try { pdfStat = statSync(outputPdf); }
     catch { throw new Error(`PDF not produced at ${outputPdf}`); }
 
-    const totalMs = Date.now() - tStart;
+    // === report ===
+    console.log('Per-tile (in plugin):');
+    for (const t of result.tileTimes) {
+        console.log(`  tile_${t.n}: ${t.ms} ms`);
+    }
+    const tileSum = result.tileTimes.reduce((a, t) => a + t.ms, 0);
+    console.log(`  sum:        ${tileSum} ms`);
     console.log('');
-    console.log(`PDF:      ${outputPdf}  (${(pdfStat.size / 1024).toFixed(1)} KB)`);
-    console.log(`Total:    ${totalMs} ms`);
+    console.log(`Populate (in plugin):  ${result.populateMs} ms`);
+    console.log(`Export   (in plugin):  ${result.exportMs} ms`);
+    console.log(`Plugin total:          ${result.totalMs} ms`);
+    console.log(`Wall clock (caller):   ${wallMs} ms`);
+    console.log(`HTTP+WS overhead:      ${wallMs - result.totalMs} ms`);
+    console.log('');
+    console.log(`PDF: ${outputPdf}  (${(pdfStat.size / 1024).toFixed(1)} KB)`);
 }
 
 main().catch(e => {
