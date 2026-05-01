@@ -314,6 +314,85 @@ endpoints behave as designed.
 
 ---
 
+## Stage 2C — Plugin load (in InDesign + UXP DT)
+
+### Environment
+
+- **InDesign** Adobe InDesign **21.3 x64** — this is InDesign 2026 (version
+  map: v18=2023, v19=2024, v20=2025, v21=2026). Confirmed via Help → About
+  InDesign (screenshot in conversation log).
+- **UXP Developer Tool** present and used to add the plugin from
+  `e:\TAI\indesign-uxp-server\plugin\`.
+
+### Permission prompts (Step 4)
+
+**No prompts were displayed** when the plugin was added/loaded. The
+manifest's only `requiredPermissions` entries are
+`network.domains: "all"` and `allowCodeGenerationFromStrings: true` —
+neither triggers an end-user consent dialog in UXP DT's "Add Plugin"
+workflow on this version of InDesign.
+
+This is fine for the *behaviour* (the permissions are still granted via the
+manifest), but it means there is no positive screenshot evidence of consent.
+The deferred follow-up is to tighten `network.domains` to a localhost
+allow-list (safety-report.md §1) before any shared-machine deployment.
+
+### Plugin panel (Steps 5, 6)
+
+- Loaded via UXP DT → "Add Plugin" → folder pointer → **Load**.
+- Panel appears as **Window → Plug-Ins → Bridge Panel**, label "Bridge
+  Panel" (matches manifest `entrypoints[0].label.default`).
+- Panel renders cleanly. Status `<p>` element shows: **`Connected to
+  bridge ✓`**.
+- Screenshot evidence in conversation log (Stage 2C reply).
+
+### Plugin DevTools console
+
+Order of log lines (top to bottom):
+
+```
+[Plugin] DOM OK — open docs: 0                  (index.js:74)
+[Plugin] new Function() OK: 2                   (index.js:81)
+[Plugin] WebSocket error: v        (×19)        (index.js:59)
+[Plugin] Connected to bridge                    (index.js:36)
+```
+
+**Interpretation.** The 19 stacked WebSocket errors are not bugs — they
+are the plugin's auto-reconnect loop ([plugin/index.js:62-65](plugin/index.js#L62-L65))
+exercising itself while the bridge was down between Stage 2B's clean
+shutdown and the Stage 2C restart. Each failed connect at 3 s interval
+fires `ws.onerror` ([plugin/index.js:59](plugin/index.js#L59)) → 19 × 3 s
+≈ ~57 s of bridge-down time, which matches the gap between Stage 2B and
+Stage 2C in real time. The final `Connected to bridge` line is the moment
+the new bridge came up and the next reconnect attempt succeeded.
+
+This is also unplanned positive evidence for **Stage 2E Test 1
+(bridge-restart auto-reconnect)** — the plugin recovers without
+intervention when the bridge returns.
+
+No other red errors or warnings.
+
+### Bridge-side evidence
+
+`/tmp/bridge.log` (running bridge) recorded `[Bridge] Plugin connected`
+the moment the plugin's auto-reconnect cycle succeeded.
+
+`curl http://127.0.0.1:3000/status` while panel was attached:
+
+```
+{"connected":true,"queueDepth":0}
+HTTP=200 TIME=0.028s
+```
+
+### Stage 2C status: **complete pass.**
+
+The substrate is alive end-to-end on the GUI side. Connection is
+established, panel UI is correct, plugin DevTools console contains only
+expected output, and the auto-reconnect loop is verified to work in
+practice as a side-effect.
+
+---
+
 ## Stage 2 verification additions (for Stage 2E)
 
 Reminder for the Stage 2E lifecycle pass — these are tests, not changes to
