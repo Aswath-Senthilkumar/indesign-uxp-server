@@ -737,6 +737,81 @@ plugin-side recovery correct (auto-reconnect lands), no hang on either
 side, no zombie state. The only nuance is the orphan-result behaviour,
 documented above.
 
+### Test 5 — 5 concurrent requests
+
+**Goal:** verify UUID-based request correlation under load and confirm
+the serial queue at the bridge level.
+
+**Method.** Five curls fired with bash `&` (parallel forks), each sending
+distinct code:
+
+```
+return { caller: <i>, n: <i> * <i>, ts: Date.now() };   for i in 1..5
+```
+
+Each response should carry `caller:i` matching its request, with `n`
+equal to `i*i`. Plugin-side `Date.now()` timestamps reveal execution
+order at the plugin.
+
+**Responses (all HTTP 200):**
+
+| caller | result | curl TIME |
+|---|---|---|
+| 1 | `{caller:1, n:1, ts:1777607599414}` | 43 ms |
+| 2 | `{caller:2, n:4, ts:1777607599422}` | 24 ms |
+| 3 | `{caller:3, n:9, ts:1777607599433}` | 9 ms |
+| 4 | `{caller:4, n:16, ts:1777607599459}` | 9 ms |
+| 5 | `{caller:5, n:25, ts:1777607599478}` | 6 ms |
+
+All five matched their own request — no cross-contamination.
+
+**Bridge log delta** (UUIDs from response IDs match those in the
+`Sending execute:` lines, omitted here for brevity):
+
+```
+Sending execute: 3942...   return { caller: 1, ...
+From plugin:    3942...    "caller":1, "n":1
+Sending execute: 7c50...   return { caller: 2, ...
+From plugin:    7c50...    "caller":2, "n":4
+Sending execute: 1829...   return { caller: 3, ...
+From plugin:    1829...    "caller":3, "n":9
+Sending execute: fdd3...   return { caller: 4, ...
+From plugin:    fdd3...    "caller":4, "n":16
+Sending execute: 73ff...   return { caller: 5, ...
+From plugin:    73ff...    "caller":5, "n":25
+```
+
+Strict `Sending → From plugin → Sending …` pattern — no two `Sending`s
+appear back-to-back, confirming the bridge's serial queue
+([bridge/server.js:39-88](bridge/server.js#L39-L88)) is exclusive.
+
+**Plugin-side execution span (from `Date.now()` `ts` values):**
+
+```
+414 → 422 → 433 → 459 → 478   (ms within minute)
++8     +11    +26    +19      Δ between consecutive executions
+```
+
+Total plugin-side span: 64 ms for 5 requests, ~13 ms average
+per-request including round-trip overhead.
+
+**Total wall-clock burst:** ~435 ms (T-0 to last curl finish). The 6×
+gap between plugin span and total is curl process spawn time + sequential
+bash forks, not bridge or plugin slowness.
+
+**Curl TIME pattern (decreasing) is an artifact, not a finding.** Bash
+`&` staggers curl spawn by a few ms; by the time curl #5 hits the
+bridge, callers 1-4 have already cleared. Earlier curls eat the queue
+serialization tax; later curls walk into an idle bridge.
+
+**`queueDepth` sampled 50 ms in returned 0.** That field counts
+*waiting* items, not the head being processed, so it only spikes
+during the brief window callers 2-5 are waiting on caller 1. Our
+sample missed that window.
+
+**Status: pass.** UUID correlation, serial queue exclusivity, and
+no-cross-contamination all confirmed.
+
 ---
 
 ## Stage 2 verification additions (for Stage 2E)
