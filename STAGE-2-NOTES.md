@@ -115,22 +115,101 @@ path-accepting tool with a payload like `../../../etc/passwd` (or
 
 ---
 
-## Block 4 — npm audit verification (deferred to Stage 2A)
+## Block 4 — npm audit verification (executed during Stage 2A)
 
-This is a verification step, not a code change. To run at the start of Stage
-2A:
+### Tooling versions
 
-```bash
-# from repo root
-npm install --ignore-scripts
-npm audit
-# then in bridge/
-cd bridge && npm install --ignore-scripts && npm audit
+```
+node --version   v24.11.1
+npm --version    11.12.0
 ```
 
-If either run reports **Critical** or **High** severity, stop and review with
-the human before proceeding. Capture output of both `npm audit` runs in this
-file under a "Block 4 — npm audit results" heading at that time.
+### bridge/ install
+
+```
+$ cd bridge && npm install --ignore-scripts
+added 70 packages, and audited 71 packages in 2s
+16 packages are looking for funding
+2 vulnerabilities (1 moderate, 1 high)
+```
+
+No prepare/postinstall hooks ran (verified by `--ignore-scripts` and by
+re-grepping the lockfile dependencies pre-install).
+
+### bridge/ audit results
+
+```
+$ npm audit
+# npm audit report
+
+path-to-regexp  <0.1.13                                                    HIGH
+  Regular Expression Denial of Service via multiple route parameters
+  https://github.com/advisories/GHSA-37ch-88jc-xwx2
+  fix available via `npm audit fix`
+  node_modules/path-to-regexp
+
+uuid  <14.0.0                                                              MODERATE
+  Missing buffer bounds check in v3/v5/v6 when buf is provided
+  https://github.com/advisories/GHSA-w5hq-g745-h8pq
+  fix available via `npm audit fix --force` (breaking)
+  node_modules/uuid
+
+2 vulnerabilities (1 moderate, 1 high)
+```
+
+### Exploitability assessment in our code
+
+| Advisory | Triggering API | Used in our bridge? |
+|---|---|---|
+| path-to-regexp ReDoS | Parameterised route patterns parsed at runtime | **No.** Bridge declares two static routes — `/status` ([bridge/server.js:153](bridge/server.js#L153)) and `/execute` ([bridge/server.js:157](bridge/server.js#L157)). Parser runs once on constants at app-init, never on attacker input. |
+| uuid v3/v5/v6 buf bounds | `uuid.vX(options, buffer, offset)` with a buffer arg | **No.** Bridge calls `uuidv4()` with no args ([bridge/server.js:54](bridge/server.js#L54)). |
+
+### Stop-gate (resolved)
+
+Per `stage-2-prompt.md` Stage 2A step 3: "If anything Critical or High is
+reported, stop and review with the human before proceeding." HIGH on
+path-to-regexp triggered the gate. Stage 2 paused for human decision; the
+human authorised the recommended `npm audit fix` (patch path-to-regexp,
+do **not** bump uuid).
+
+### Post-fix install + audit
+
+```
+$ cd bridge && npm audit fix
+changed 1 package, and audited 71 packages in 1s
+1 moderate severity vulnerability  (uuid only)
+
+$ npm audit
+# npm audit report
+uuid  <14.0.0                                                              MODERATE
+  Missing buffer bounds check in v3/v5/v6 when buf is provided
+  https://github.com/advisories/GHSA-w5hq-g745-h8pq
+  fix available via `npm audit fix --force` (breaking)
+  node_modules/uuid
+
+1 moderate severity vulnerability
+```
+
+Verified `node_modules/path-to-regexp` now at `0.1.13` (the patched version)
+in `bridge/package-lock.json`. The HIGH advisory is resolved.
+
+### Decision rationale
+
+- **path-to-regexp — patched.** Non-breaking lockfile bump. No actual
+  exploit path in the current bridge (routes are static), but patching
+  removes the latent risk if a future change ever adds a parameterised
+  route, and it costs us nothing.
+- **uuid v9 — retained.** The advisory's triggering API
+  (`uuid.vX(options, buf, offset)`) is never called by the bridge — we use
+  the no-arg form `uuidv4()` at [bridge/server.js:54](bridge/server.js#L54).
+  The fix is a breaking major bump (v9 → v14) which would require
+  re-validating our import shape against the new package layout. No security
+  benefit in our case, so we keep v9.
+
+### Plugin folder
+
+`plugin/` contains no `package.json` (verified). No second `npm install`
+needed.
 
 ---
 
