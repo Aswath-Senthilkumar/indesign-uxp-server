@@ -505,6 +505,59 @@ correlation will be exercised explicitly in Stage 2E Test 5.
 
 ---
 
+## Stage 2E — Connection lifecycle tests
+
+### Test 1 — Bridge restart while plugin connected
+
+**Goal:** verify the plugin's auto-reconnect loop ([plugin/index.js:62-65](plugin/index.js#L62-L65))
+recovers cleanly when the bridge restarts.
+
+**Method.** Shell-side: `taskkill /F` the bridge process, sleep 10 s, `node
+server.js` again. Plugin-side (human-observed): watch panel status text and
+DevTools console.
+
+**Timeline (server clock, retry run):**
+
+| Time | Event |
+|---|---|
+| 20:28:09.491 | bridge killed (`taskkill /F` on PID 42136) |
+| 20:28:09.491 → ~20:28:21 | bridge down; `GET /status` returns `HTTP=000` |
+| ~20:28:21.5 | bridge restart issued |
+| ~20:28:22 | bridge logs `Waiting for UXP plugin to connect...` then `[Bridge] Plugin connected` |
+| ~20:28:27 | `GET /status` returns `{"connected":true,"queueDepth":0}` HTTP 200 |
+
+**Plugin-side observations (confirmed by human):**
+
+1. Panel status text flipped to **"Disconnected — retrying in 3s"** within
+   ~1 s of T-0.
+2. Panel status text flipped back to **"Connected to bridge ✓"** when the
+   new bridge accepted the next reconnect attempt.
+3. The earlier inadvertent observation in 2C (19 stacked
+   `[Plugin] WebSocket error: v` lines followed by `[Plugin] Connected to
+   bridge`) is the same mechanism playing out over a longer downtime.
+
+**Bridge log delta (clean shutdown is silent — `taskkill /F` is a hard
+kill, no `ws.on('close')` handler runs):**
+
+```
+[Bridge] WARNING: BRIDGE_TOKEN not set. ...
+[Bridge] HTTP server on http://127.0.0.1:3000
+[Bridge] WebSocket server on ws://127.0.0.1:3001
+[Bridge] Waiting for UXP plugin to connect...
+[Bridge] Plugin connected
+```
+
+The absence of a `[Bridge] Plugin disconnected` line on the kill side is
+worth noting: a hard process kill prevents any clean-shutdown logging.
+Soft shutdown (Ctrl+C → SIGINT) would let the WS close handler fire. Not a
+problem for our use case but informs the lifecycle test interpretation.
+
+**Status: pass.** Plugin recovers without intervention; downtime visible
+only via panel status text and DevTools WS-error log entries. No data loss
+because no requests were in flight (Test 4 covers in-flight kill).
+
+---
+
 ## Stage 2 verification additions (for Stage 2E)
 
 Reminder for the Stage 2E lifecycle pass — these are tests, not changes to
