@@ -106,8 +106,8 @@ One comp, four named frames populated, image placed and fit, PDF
 exported, no other content disturbed. The substrate proven through
 Stage 2 is now a render pipeline through Stage 3.
 
-Tag: `stage-3-complete` at the wrap-up commit (push pending user
-authorisation — see closing summary).
+Tag: `stage-3-complete` at the wrap-up commit `e2ed837`. **Pushed to
+`origin`** and verified via `git ls-remote --tags`.
 
 ---
 
