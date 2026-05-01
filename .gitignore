@@ -113,3 +113,9 @@ Desktop.ini
 
 # Ad-hoc screenshots
 hn-submit.png
+
+# Mock-data: keep comps.json and images/, ignore raw per-comp source folders
+# and the build helper script.
+mock-data/build-comps.cjs
+mock-data/*/
+!mock-data/images/
