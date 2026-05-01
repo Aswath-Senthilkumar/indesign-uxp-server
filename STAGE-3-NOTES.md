@@ -8,6 +8,109 @@ verification step, raw output, and any findings worth surfacing for Stage 4.
 
 ---
 
+## Stage 3 — One-page summary
+
+**Branch:** `analysis/initial-pass`
+**Reference tag (Stage 2):** `stage-1.5-complete` at `1ee2156`.
+**Commits added in Stage 3:** **8** (this wrap-up will be #8).
+
+### Sub-stages
+
+| | Status | Commit |
+|---|---|---|
+| 3.1 Template prep | ✅ pass | `983fb4b` |
+| 3.2 Frame verification (smoke test) | ✅ pass | `377bb2e` |
+| 3.3 Mock data prep | ✅ pass | `7cbfd40` (data) + `b53cf0d` (notes) |
+| 3.4 Render script | ✅ pass | `5f777db` (notes) + `9d6193b` (script — gitignore-fix follow-up) |
+| 3.5 Visual verification | ✅ pass | `746f7cf` |
+| 3.6 Wrap-up | this commit | (this commit) |
+
+### Frame verification result (3.2)
+
+```json
+{
+  "tile_1_photo":      { "text": false, "rectangle": true  },
+  "tile_1_address":    { "text": true,  "rectangle": false },
+  "tile_1_city_state": { "text": true,  "rectangle": false },
+  "tile_1_sf_ac":      { "text": true,  "rectangle": false }
+}
+```
+
+Exactly the expected type assignment for each named frame; no typos, no
+missing frames.
+
+### Mock comp used
+
+`mock-3` — **3635 S 43rd Ave, Phoenix, AZ**, 17,799 SF / 133.00 AC.
+Image: `mock-data/images/3635-s-43rd-ave.jpg` (177 KB).
+The 133-acre `land_area` is legitimate (user-confirmed, not a typo).
+
+### Render time
+
+**7.27 s total** for one tile, six steps (one HTTP round-trip each):
+
+```
+   48 ms  confirm active document
+   90 ms  set tile_1_address
+  277 ms  set tile_1_city_state
+   12 ms  set tile_1_sf_ac
+  316 ms  place + fit tile_1_photo (FILL_PROPORTIONALLY)
+ 6459 ms  export PDF
+─────────
+ 7268 ms  total
+```
+
+PDF: `output/test-render.pdf` (294.9 KB).
+
+Naive scaling to 12 tiles ≈ ~16 s of populate work + one ~6.5 s export
+≈ ~22 s wall-clock — still within 30 s, but if we push tile count up or
+add image-rich tiles, **batching the populate operations into a single
+`/execute` script** is the obvious optimisation. Stage 4 work, not 3.
+
+### Visual verification (3.5) — verbatim
+
+> "Compared everything and the swap looks clean."
+
+Photo fit (`FitOptions.fillProportionally`) produced the expected aerial
+framing for the test image; other tiles untouched.
+
+### Commits added in Stage 3
+
+```
+983fb4b docs: stage 3.1 template prep recorded
+377bb2e docs: stage 3.2 frame verification passed
+7cbfd40 chore: stage 3.3 mock data (comps.json + 7 images)
+b53cf0d docs: stage 3.3 mock data prep
+5f777db feat: stage 3.4 first render script
+9d6193b fix: stage 3.4 add test-render.js (caught by stale test-*.js gitignore rule)
+746f7cf docs: stage 3.5 visual verification passed
+(this) docs: stage 3 complete
+```
+
+### To flag for Stage 4
+
+| Item | Source |
+|---|---|
+| `FitOptions.fillProportionally` (camelCase, UXP form) confirmed correct for aerial photos in this template — re-use for all 12 tiles | Stage 3.4 |
+| 12-tile render should batch populate operations into one `/execute` script (one HTTP round-trip + one `new Function` compile + one PDF export) — naive per-tile-per-call scaling makes a 12-tile render walk to the 30 s ceiling | Stage 3.4 latency analysis |
+| `INDESIGN_ALLOWED_ROOTS` does not gate calls that go direct to the bridge `/execute` endpoint — the path validator only runs in `src/handlers/`. If we want path-traversal protection for the Stage-4 dashboard's render path, we need either (a) bridge-side path validation as a separate request shape, or (b) caller-side validation in master-app | Stage 3.4 path-safety note |
+| Acres rendered as `133.00 AC` per the "to 2 decimal places" rule. If Hannah prefers integer-acre values to render without `.00`, the formatter in `formatSfAc()` is one line to change. Hold for Hannah's review | Stage 3.4 / 3.5 |
+| Stage 2E's deferred items still apply (mandatory `BRIDGE_TOKEN`, tighten `network.domains`, `/execute` check ordering, force-quit timeout disambiguation, orphan-result resubmit pattern) | from STAGE-2-NOTES.md |
+
+---
+
+## Stage 3 complete
+
+The first end-to-end render through Hannah's real template **works**.
+One comp, four named frames populated, image placed and fit, PDF
+exported, no other content disturbed. The substrate proven through
+Stage 2 is now a render pipeline through Stage 3.
+
+Tag: `stage-3-complete` at the wrap-up commit (push pending user
+authorisation — see closing summary).
+
+---
+
 ## Prerequisites — verified at start
 
 - `STAGE-2-NOTES.md` exists at repo root
