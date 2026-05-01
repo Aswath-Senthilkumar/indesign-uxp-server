@@ -7,6 +7,104 @@ is deferred to a later stage.
 
 ---
 
+## Stage 2 — One-page summary
+
+**Branch:** `analysis/initial-pass`
+**Reference tag:** `stage-1.5-complete` at `1ee2156` (post-mitigation,
+pre-Stage-2A).
+**Commits since tag:** **13** (12 prior + this Stage 2F wrap-up).
+
+### Block items (pre-Stage-2)
+
+| # | Item | Commit | Status |
+|---|---|---|---|
+| 1 | Bridge bind to `127.0.0.1` only | (no commit — already correct) | **pass** — verified by code reading and at runtime in Stage 2B (netstat) |
+| 2 | Disable `execute_indesign_code` in all registration sites | `03800b1` | **pass** — router branch commented, tool definition removed, help list pruned, handler body returns disabled-error stub. Concern 3 grep verified no active path remains |
+| 3 | Path traversal protection on every user-supplied path | `0140e21` | **pass** — `validatePath()` in `src/utils/pathValidator.js` applied to 11 handler entry points across 5 files |
+| 4 | `npm audit` Critical/High gate | `b513f02` (resolution) | **gate triggered then resolved** — HIGH on `path-to-regexp <0.1.13`; human authorised non-breaking `npm audit fix`; only the moderate uuid v9 advisory remains, intentionally retained because the buggy API path is unreachable from our call site |
+
+### Concern items (pre-Stage-2)
+
+| # | Item | Commit | Status |
+|---|---|---|---|
+| 1 | Pin Node engine `>=18.0.0` in `bridge/package.json` | `bc53ef6` | done |
+| 2 | Document plugin manifest permissions reasoning | `19886c9` | done — `plugin/README.md` covers every declared/declined permission and flags the still-open `network.domains: "all"` tightening |
+| 3 | Verify `executeScript` fully disabled | (folded into Block 2 record above) | done — grep audit recorded in this file |
+
+### Stage 2A — Install + audit
+
+- `npm install --ignore-scripts` in `bridge/`: 70 packages, no postinstall scripts ran.
+- `node v24.11.1`, `npm 11.12.0` (recorded for reproducibility).
+- Initial audit: 1 HIGH (`path-to-regexp` ReDoS), 1 moderate (`uuid` buf bounds). HIGH triggered the Stage 2A.3 stop-gate.
+- **Decision:** patch path-to-regexp via `npm audit fix` (non-breaking lockfile bump); do **not** bump uuid v9 → v14 (breaking, no actual security benefit because the buggy API path is never called).
+- Post-fix audit: only the moderate uuid advisory remains, by design.
+- `plugin/` has no `package.json`, so no second install needed.
+
+### Stage 2B — Bridge runtime
+
+- Bridge binds `127.0.0.1` on both `:3000` (HTTP) and `:3001` (WebSocket); verified live via `netstat`.
+- Endpoint smoke tests: `GET /status` returns `{connected:false,queueDepth:0}` (10 ms); `POST /execute` with no plugin returns 503 + plugin-not-connected (13 ms).
+- `0.0.0.0:3000` connect from same machine fails as expected (`HTTP=000`).
+- **Cross-device reachability test still owed by human** before any shared-machine deployment (couldn't run in this session — no second device).
+- Minor anomaly noted: `/execute` checks plugin presence *before* body validity, so a malformed POST during disconnection returns 503 with a misleading "plugin-not-connected" message rather than 400. Debugging-UX paper cut, not a security issue.
+
+### Stage 2C — Plugin load
+
+- InDesign **21.3 x64** = InDesign 2026 (well above the 2024+ requirement).
+- No permission prompts displayed during Add Plugin / Load — this means there is no positive screenshot evidence of consent. Manifest's `network.domains: "all"` is unchanged from the safety review and remains a Stage-4 follow-up.
+- Panel renders cleanly, status `<p>` shows `Connected to bridge ✓`, bridge log shows `[Bridge] Plugin connected`, `/status` returns `connected:true`.
+- Plugin DevTools console clean except for an unplanned-but-expected stack of `WebSocket error: v` lines that turned out to be the auto-reconnect loop running between Stage 2B's bridge shutdown and 2C's restart — accidental positive evidence for Stage 2E Test 1.
+
+### Stage 2D — Round-trip latency
+
+Three escalating curls, end-to-end (caller → HTTP → bridge → WS → plugin → `new Function('app', code)` → InDesign DOM → bridge → caller):
+
+| # | Body | Total |
+|---|---|---|
+| 1 | `1 + 1` | 40 ms |
+| 2 | `app.documents.length` | 34 ms |
+| 3 | `{docs, version, name}` | 30 ms |
+
+Above the prompt's "single-digit ms" expectation. Trend (40 → 34 → 30 ms) consistent with JIT warmup. UUIDs preserved end-to-end. `app.version="21.3.0.60"` matches the InDesign 2026 build seen in Help → About.
+
+For our 12-tile render flow, ~30 ms × dozens of operations ≈ low single-second total — acceptable. If latency climbs into hundreds of ms per call later, the natural fix is to batch a whole render into one `/execute` script.
+
+### Stage 2E — Lifecycle (key findings, one line each)
+
+- **Test 1** — bridge restart while plugin connected → plugin auto-reconnects within ≤3 s of new bridge accepting; panel flips Disconnected → Connected cleanly.
+- **Test 2** — plugin reload via UXP DT → graceful WS close logs `[Bridge] Plugin disconnected`, reload connects fresh instance.
+- **Test 3** — InDesign force-quit mid-flight → **race finding**: the bridge's 30 s timeout wins against the WS-close handler on Windows force-quit, so the caller sees `"Execution timed out after 30s"` rather than `"Plugin disconnected"`. Both paths exist; the timer just fires first.
+- **Test 4** — bridge kill mid-flight → curl errors cleanly in ~0.7 s after kill (`HTTP=000`); plugin auto-reconnects when bridge returns; **orphan-result note**: in-flight setTimeout results have nowhere to go after a bridge restart, so callers must resubmit, not assume the plugin remembered.
+- **Test 5** — 5 concurrent requests → UUID correlation perfect, all 5 responses match their senders; bridge log shows strict `Sending → From plugin → Sending → …` (no interleaving) confirming the serial queue's exclusivity.
+- **Test 6** — 2 concurrent render-shaped sequences (multi-step + async) → A.end (781777) precedes B.start (781780) by 3 ms; multi-step state didn't cross-contaminate; serial queue holds for realistic workloads.
+- **Test 7** — disconnect UX → status text static at `"Disconnected — retrying in 3s"` for full 20 s observation; no countdown, no spinner, no clickable elements. The plugin's UI is a debug aid, not a user-facing surface.
+
+### Deferred to Stage 4 (must not be lost)
+
+| Item | Source |
+|---|---|
+| Mandatory `BRIDGE_TOKEN` enforcement (currently warns and continues; should `process.exit(1)` if unset) | safety-report.md §10 |
+| Tighten `plugin/manifest.json` `network.domains` from `"all"` to `["ws://127.0.0.1:3001", "ws://localhost:3001"]` | safety-report.md §1 |
+| Reorder `/execute` check sequence in the bridge so missing `code` returns 400 even when plugin is also disconnected | Stage 2B paper cut |
+| Cross-device LAN-IP reachability test (`curl http://<LAN-IP>:3000/status` from another machine should fail) | Stage 2B owed |
+| Force-quit timeout disambiguation strategy in dashboard — on a 30 s timeout, dashboard should poll `/status` to distinguish "plugin slow" from "plugin died" | Test 3 finding |
+| Caller-side resubmit pattern for orphan results — never rely on the plugin to "remember" mid-flight requests across bridge restart | Test 4 finding |
+| Concurrent-request UI feedback — surface "you're #N in queue" / per-render ETA so the dashboard doesn't lie about latency for second-and-beyond submissions | Tests 5/6 finding |
+| User-facing disconnect UX — dashboard must own its own connection-health indicator with countdown / liveness / retry affordance, since the plugin's panel doesn't | Test 7 finding |
+| (Optional) Replace the eval-string protocol with a fixed dispatch table of named operations and drop `allowCodeGenerationFromStrings` from the manifest | safety-report.md §1 long-term hardening |
+
+---
+
+## Stage 2 complete
+
+The substrate is **verified**. End-to-end requests round-trip from a CLI caller through the bridge, the plugin's WebSocket, `new Function('app', code)`, the InDesign DOM, and back. The seven lifecycle scenarios are all characterised, with two real findings (Test 3 race, Test 4 orphan-result) recorded for Stage 4 dashboard design.
+
+**Recording / screenshots — deferred.** The prompt offered a 60 s screen recording or sequential screenshots as evidence. We chose to skip both: this notes file is more thorough than a recording would be (every test has timestamps, log diffs, and per-axis interpretation), and the screenshots already pasted in the conversation log for Stage 2C (panel showing `Connected to bridge ✓`, plus InDesign with the panel docked) and Stage 2D (DevTools `[Plugin] Received:` confirmations) and Stage 2E Test 4 (DevTools showing the WS-error → reconnect cycle) cover the same three views the recording would have shown. If a recording is later required for compliance or onboarding, it can be produced from the running substrate without re-doing any test work.
+
+**Substrate teardown.** Bridge stopped (`taskkill /F`), plugin left in its `Disconnected — retrying in 3s` state — that is, the WebSocket dies as soon as the bridge does, the plugin enters its 3 s reconnect cycle, and any further activity is benign console-error noise until either the bridge is restarted or the panel is unloaded from UXP DT (a manual GUI step). The repo is ready for Stage 3.
+
+---
+
 ## Block 1 — Bridge binding
 
 **Status:** No code change required. The bridge already binds to
