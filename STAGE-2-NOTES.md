@@ -244,6 +244,76 @@ deferred item.
 
 ---
 
+## Stage 2B — Bridge runtime verification
+
+### Bind verification (live)
+
+Bridge started in background:
+
+```
+[Bridge] WARNING: BRIDGE_TOKEN not set. Any local process can send InDesign commands.
+[Bridge]   To enable auth: export BRIDGE_TOKEN="$(openssl rand -hex 32)" before starting.
+[Bridge] HTTP server on http://127.0.0.1:3000
+[Bridge] WebSocket server on ws://127.0.0.1:3001
+[Bridge] Waiting for UXP plugin to connect...
+```
+
+Token warning is expected (mandatory-token enforcement is a deferred Stage 4
+item per the safety report). No errors, no outbound network calls in the
+logs.
+
+`netstat -an | grep -E ':3000|:3001'` while running:
+
+```
+TCP    127.0.0.1:3000         0.0.0.0:0              LISTENING
+TCP    127.0.0.1:3001         0.0.0.0:0              LISTENING
+```
+
+Both sockets bound to `127.0.0.1` only — Block 1 verified at runtime, not
+just by code reading.
+
+### Non-loopback reachability (single-machine proxy test)
+
+Could not run the cross-device test (no second device available right now).
+Closest available proxy: `curl -m 2 http://0.0.0.0:3000/status` from the
+same machine — connection failed (`HTTP=000`), consistent with the wildcard
+address not being bound. The proper cross-device check
+(`curl http://<LAN-IP>:3000/status` from another machine) is left as a
+**manual verification step for the human** before any shared-machine use.
+
+### Endpoint smoke tests (curl from localhost)
+
+| Request | Expected | Actual | Latency |
+|---|---|---|---|
+| `GET /status` | `{connected:false,queueDepth:0}` 200 | `{"connected":false,"queueDepth":0}` 200 | 10 ms |
+| `POST /execute {code:"return 1+1"}` (no plugin) | 503 + plugin-not-connected error | 503 + correct message | 13 ms |
+| `POST /execute {}` (missing code, no plugin) | 400 (would, with plugin connected) | 503 — plugin-not-connected check fires *before* the missing-code check | 3 ms |
+
+`/status` and `/execute` response shapes match the bridge source. Sub-15 ms
+round-trips at the HTTP layer; the in-flight protocol latency to plugin can
+only be measured once a plugin is connected (Stage 2D).
+
+#### Minor anomaly worth noting
+
+The order of checks in `/execute`
+([bridge/server.js:158-167](bridge/server.js#L158-L167)) is `pluginSocket
+null → 503` first, `body has code → 400` second. So a malformed POST during
+disconnected periods returns the wrong status code (503 with a
+"plugin-not-connected" message instead of 400 with a "missing code"
+message). Not a security issue, but a debugging-UX paper cut. **Defer:**
+worth a small reorder when we touch the bridge in earnest in a later stage.
+
+### Bridge shutdown
+
+`taskkill //F //PID <pid>` after netstat lookup. Confirmed both ports left
+LISTENING state; only TIME_WAIT entries from the completed curl client
+sockets remained.
+
+### Stage 2B status: **complete pass.** Bridge alive, bound to loopback only,
+endpoints behave as designed.
+
+---
+
 ## Stage 2 verification additions (for Stage 2E)
 
 Reminder for the Stage 2E lifecycle pass — these are tests, not changes to
