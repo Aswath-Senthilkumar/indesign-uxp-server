@@ -119,3 +119,6 @@ hn-submit.png
 mock-data/build-comps.cjs
 mock-data/*/
 !mock-data/images/
+
+# Render output (regenerable from test-render.js)
+output/

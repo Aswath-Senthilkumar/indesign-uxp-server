@@ -142,3 +142,91 @@ Picked by the user. Will render `±17,799 SF | ±133 AC` (the
 high-acreage value is intentional, not formatted to e.g. `1.33`).
 Image: `mock-data/images/3635-s-43rd-ave.jpg` (177 KB).
 
+---
+
+## Stage 3.4 — Render script
+
+`test-render.js` written at the repo root. Per-step POST to
+`http://127.0.0.1:3000/execute`, each step timed independently, no
+document close at the end so the result stays open in InDesign for
+Stage 3.5 visual inspection.
+
+### Note on path safety
+
+The bridge's `/execute` endpoint forwards code strings to the plugin
+verbatim — it does **not** run the path validator added in Stage 1.5.
+That validator (`src/utils/pathValidator.js`) lives in the MCP-server
+handlers under `src/`, which we are not going through. The Stage 3
+prompt's mention of `INDESIGN_ALLOWED_ROOTS` therefore does not gate
+this script. Defense here is best-effort:
+
+- `path.resolve()` to absolute on every path before embedding
+- local pre-flight check that comp + image exist on disk and image is
+  >10 KB before any bridge call
+- `fs.mkdirSync({recursive: true})` for `output/` to avoid path-creation
+  errors mid-render
+
+The structural protection is `BRIDGE_TOKEN` mandatory enforcement, which
+is a deferred Stage-4 item (safety-report.md §10). With that not yet
+in place, anyone who can talk to localhost:3000 can already eval any
+JS in InDesign — path validation isn't the binding constraint.
+
+### Run
+
+```
+$ node test-render.js --id mock-3
+Comp:     mock-3  3635 S 43rd Ave, Phoenix, AZ
+Image:    E:\TAI\indesign-uxp-server\mock-data\images\3635-s-43rd-ave.jpg  (172.7 KB)
+Output:   E:\TAI\indesign-uxp-server\output\test-render.pdf
+Bridge:   http://127.0.0.1:3000  connected=true
+
+  [   48 ms] confirm active document is template-v2-test.indd
+  [   90 ms] set tile_1_address = "3635 S 43rd Ave"
+  [  277 ms] set tile_1_city_state = "Phoenix, AZ"
+  [   12 ms] set tile_1_sf_ac = "±17,799 SF | ±133.00 AC"
+  [  316 ms] place image into tile_1_photo (FILL_PROPORTIONALLY)
+  [ 6459 ms] export PDF -> output/test-render.pdf
+
+PDF:      E:\TAI\indesign-uxp-server\output\test-render.pdf  (294.9 KB)
+Total:    7268 ms
+```
+
+### Verification against Stage 3.4 success criteria
+
+| Criterion | Result |
+|---|---|
+| Script completes without error | ✅ exit 0 |
+| `output/test-render.pdf` exists and >50 KB | ✅ 294.9 KB |
+| Each step in single-digit seconds | ✅ longest is 6.46 s (export) |
+| Total render under 30 s | ✅ 7.27 s |
+
+### Per-step latency observations
+
+- The export step (~6.5 s) is the dominant cost — it's genuinely IO-heavy
+  inside InDesign (rasterise + write PDF). Acceptable for a 12-tile sheet
+  render that runs maybe once per minute in real use.
+- Step 3 (`set tile_1_city_state`) was 277 ms, several × the other
+  text-set steps (90, 12 ms). Probably JIT warm-up or noise; not
+  worth chasing in Stage 3 but flag if it recurs.
+- Total = 7.27 s for one tile. If we naively scale to 12 tiles (4 sets +
+  1 image + 1 fit per tile, plus one export), batched execution is
+  almost certainly required to keep a full sheet under ~10 s — single
+  `/execute` script with all DOM ops and one export at the end. Stage 4+
+  concern, not Stage 3.
+
+### `FitOptions.fillProportionally` confirmed reachable
+
+`require('indesign').FitOptions.fillProportionally` returned a valid enum
+value at runtime — the camelCase convention from the README is the
+correct UXP form (not the screaming-snake `FILL_PROPORTIONALLY` of the
+ExtendScript era). Recording explicitly because the same call shape will
+be reused for every tile in Stage 4.
+
+### Timestamp
+
+Render produced PDF at `2026-05-01 15:28` local time.
+
+Doc was left open in InDesign for Stage 3.5 inspection. The PDF is at
+`output/test-render.pdf` (gitignored — see decision in 3.6).
+
+
