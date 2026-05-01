@@ -3,6 +3,7 @@
  */
 import { ScriptExecutor } from '../core/scriptExecutor.js';
 import { formatResponse, formatErrorResponse, escapeJsxString } from '../utils/stringUtils.js';
+import { validatePath } from '../utils/pathValidator.js';
 
 export class ExportHandlers {
     /**
@@ -14,6 +15,13 @@ export class ExportHandlers {
             preset = 'High Quality Print',
         } = args;
 
+        let safePath;
+        try {
+            safePath = validatePath(filePath, 'filePath');
+        } catch (e) {
+            return formatErrorResponse(e.message, 'Export PDF');
+        }
+
         const code = `
             const { ExportFormat } = require('indesign');
             if (app.documents.length === 0) {
@@ -21,8 +29,8 @@ export class ExportHandlers {
             }
             const doc = app.activeDocument;
             try {
-                await doc.exportFile(ExportFormat.pdfType, ${JSON.stringify(filePath)}, false, ${JSON.stringify(preset)});
-                return { success: true, message: 'PDF exported to ' + ${JSON.stringify(filePath)} };
+                await doc.exportFile(ExportFormat.pdfType, ${JSON.stringify(safePath)}, false, ${JSON.stringify(preset)});
+                return { success: true, message: 'PDF exported to ' + ${JSON.stringify(safePath)} };
             } catch(e) {
                 return { success: false, error: 'Export failed: ' + e.message };
             }
@@ -45,6 +53,13 @@ export class ExportHandlers {
             resolution = 300,
             pageRange = 'all'
         } = args;
+
+        let safeFolder;
+        try {
+            safeFolder = validatePath(folderPath, 'folderPath');
+        } catch (e) {
+            return formatErrorResponse(e.message, 'Export Images');
+        }
 
         const formatLower = format.toLowerCase();
 
@@ -70,7 +85,7 @@ export class ExportHandlers {
                 return { success: false, error: 'No document open' };
             }
             const doc = app.activeDocument;
-            const folder = ${JSON.stringify(folderPath)};
+            const folder = ${JSON.stringify(safeFolder)};
 
             try {
                 const formatStr = ${JSON.stringify(format)};
@@ -125,6 +140,13 @@ export class ExportHandlers {
     static async packageDocument(args) {
         const { folderPath, includeFonts = true, includeLinks = true, includeProfiles = true } = args;
 
+        let safeFolder;
+        try {
+            safeFolder = validatePath(folderPath, 'folderPath');
+        } catch (e) {
+            return formatErrorResponse(e.message, 'Package Document');
+        }
+
         const code = `
             if (app.documents.length === 0) {
                 return { success: false, error: 'No document open' };
@@ -133,7 +155,7 @@ export class ExportHandlers {
 
             try {
                 doc.packageForPrint(
-                    ${JSON.stringify(folderPath)},
+                    ${JSON.stringify(safeFolder)},
                     ${includeFonts},
                     ${includeLinks},
                     ${includeProfiles},

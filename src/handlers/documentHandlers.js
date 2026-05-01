@@ -6,6 +6,7 @@ import { readFileSync } from 'fs';
 import { ScriptExecutor } from '../core/scriptExecutor.js';
 import { formatResponse, formatErrorResponse } from '../utils/stringUtils.js';
 import { sessionManager } from '../core/sessionManager.js';
+import { validatePath } from '../utils/pathValidator.js';
 
 export class DocumentHandlers {
     /**
@@ -182,13 +183,20 @@ export class DocumentHandlers {
     static async openDocument(args) {
         const { filePath } = args;
 
+        let safePath;
+        try {
+            safePath = validatePath(filePath, 'filePath');
+        } catch (e) {
+            return formatErrorResponse(e.message, 'Open Document');
+        }
+
         const code = `
-            const file = new File(${JSON.stringify(filePath)});
+            const file = new File(${JSON.stringify(safePath)});
             if (!file.exists) {
-                return { success: false, error: 'File not found: ' + ${JSON.stringify(filePath)} };
+                return { success: false, error: 'File not found: ' + ${JSON.stringify(safePath)} };
             }
             await app.open(file);
-            return { success: true, message: 'Document opened: ' + ${JSON.stringify(filePath)} };
+            return { success: true, message: 'Document opened: ' + ${JSON.stringify(safePath)} };
         `;
 
         const result = await ScriptExecutor.executeViaUXP(code);
@@ -203,6 +211,15 @@ export class DocumentHandlers {
     static async saveDocument(args) {
         const { filePath } = args;
 
+        let safePath = null;
+        if (filePath !== undefined && filePath !== null) {
+            try {
+                safePath = validatePath(filePath, 'filePath');
+            } catch (e) {
+                return formatErrorResponse(e.message, 'Save Document');
+            }
+        }
+
         // M6: calling doc.save() with no path on a never-saved document opens a system
         // dialog that blocks the UXP event loop until dismissed. Require filePath if unsaved.
         const code = `
@@ -210,8 +227,8 @@ export class DocumentHandlers {
                 return { success: false, error: 'No document open' };
             }
             const doc = app.activeDocument;
-            ${filePath
-                ? `await doc.save(new File(${JSON.stringify(filePath)}));`
+            ${safePath
+                ? `await doc.save(new File(${JSON.stringify(safePath)}));`
                 : `
             let savedPath = null;
             try { const fp = await doc.filePath; savedPath = fp ? String(fp) : null; } catch(e) {}
@@ -318,12 +335,20 @@ export class DocumentHandlers {
     static async dataMerge(args) {
         const { dataSource, targetPage = 0, createNewPages = false, removeUnusedPages = false } = args;
 
+        // Block 3: validate the user-supplied CSV path before any fs read
+        let safeDataSource;
+        try {
+            safeDataSource = validatePath(dataSource, 'dataSource');
+        } catch (e) {
+            return formatErrorResponse(e.message, 'Data Merge');
+        }
+
         // H7: Pre-validate CSV fields against document template placeholders
 
         // Step 1: parse CSV headers from disk (Node.js side)
         let csvFields;
         try {
-            const content = readFileSync(dataSource, 'utf8');
+            const content = readFileSync(safeDataSource, 'utf8');
             const firstLine = content.split(/\r?\n/)[0];
             if (!firstLine || !firstLine.trim()) {
                 return formatErrorResponse('Data source CSV is empty or has no header row', 'Data Merge');
@@ -381,9 +406,9 @@ export class DocumentHandlers {
                 return { success: false, error: 'No document open' };
             }
             const doc = app.activeDocument;
-            const dataFile = new File(${JSON.stringify(dataSource)});
+            const dataFile = new File(${JSON.stringify(safeDataSource)});
             if (!dataFile.exists) {
-                return { success: false, error: 'Data source file not found: ' + ${JSON.stringify(dataSource)} };
+                return { success: false, error: 'Data source file not found: ' + ${JSON.stringify(safeDataSource)} };
             }
             const targetPageObj = doc.pages.item(${targetPage});
             await doc.dataMerge(dataFile, targetPageObj, ${createNewPages}, ${removeUnusedPages});
@@ -954,14 +979,21 @@ export class DocumentHandlers {
     static async exportDocumentXml(args) {
         const { filePath, includeImages = true, includeStyles = true } = args;
 
+        let safePath;
+        try {
+            safePath = validatePath(filePath, 'filePath');
+        } catch (e) {
+            return formatErrorResponse(e.message, 'Export Document XML');
+        }
+
         const code = `
             if (app.documents.length === 0) {
                 return { success: false, error: 'No document open' };
             }
             const { ExportFormat } = require('indesign');
             const doc = app.activeDocument;
-            await doc.exportFile(ExportFormat.xmlType, ${JSON.stringify(filePath)}, false);
-            return { success: true, message: 'Document exported as XML successfully', filePath: ${JSON.stringify(filePath)} };
+            await doc.exportFile(ExportFormat.xmlType, ${JSON.stringify(safePath)}, false);
+            return { success: true, message: 'Document exported as XML successfully', filePath: ${JSON.stringify(safePath)} };
         `;
 
         const result = await ScriptExecutor.executeViaUXP(code);

@@ -3,6 +3,7 @@
  */
 import { ScriptExecutor } from '../core/scriptExecutor.js';
 import { formatResponse, formatErrorResponse } from '../utils/stringUtils.js';
+import { validatePath } from '../utils/pathValidator.js';
 
 export class BookHandlers {
     /**
@@ -11,11 +12,18 @@ export class BookHandlers {
     static async createBook(args) {
         const { filePath } = args;
 
+        let safePath;
+        try {
+            safePath = validatePath(filePath, 'filePath');
+        } catch (e) {
+            return formatErrorResponse(e.message, 'Create Book');
+        }
+
         const code = `
             try {
-                const book = await app.books.add(${JSON.stringify(filePath)});
+                const book = await app.books.add(${JSON.stringify(safePath)});
                 await book.save();
-                return { success: true, message: 'Book created: ' + ${JSON.stringify(filePath)} };
+                return { success: true, message: 'Book created: ' + ${JSON.stringify(safePath)} };
             } catch(e) {
                 return { success: false, error: 'Error creating book: ' + e.message };
             }
@@ -33,9 +41,16 @@ export class BookHandlers {
     static async openBook(args) {
         const { filePath } = args;
 
+        let safePath;
+        try {
+            safePath = validatePath(filePath, 'filePath');
+        } catch (e) {
+            return formatErrorResponse(e.message, 'Open Book');
+        }
+
         const code = `
             try {
-                const book = await app.open(${JSON.stringify(filePath)});
+                const book = await app.open(${JSON.stringify(safePath)});
                 return { success: true, message: 'Book opened: ' + book.name, name: book.name };
             } catch(e) {
                 return { success: false, error: 'Error opening book: ' + e.message };

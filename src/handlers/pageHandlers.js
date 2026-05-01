@@ -3,6 +3,7 @@
  */
 import { ScriptExecutor } from '../core/scriptExecutor.js';
 import { formatResponse, formatErrorResponse } from '../utils/stringUtils.js';
+import { validatePath } from '../utils/pathValidator.js';
 
 export class PageHandlers {
     /**
@@ -281,13 +282,20 @@ export class PageHandlers {
     static async placeFileOnPage(args) {
         const { pageIndex, filePath, x = 10, y = 10, layerName, showingOptions = false, autoflowing = false } = args;
 
+        let safePath;
+        try {
+            safePath = validatePath(filePath, 'filePath');
+        } catch (e) {
+            return formatErrorResponse(e.message, 'Place File on Page');
+        }
+
         const code = `
             if (app.documents.length === 0) return { success: false, error: 'No document open' };
             const doc = app.activeDocument;
             if (${pageIndex} < 0 || ${pageIndex} >= doc.pages.length) return { success: false, error: 'Page index out of range' };
             const page = doc.pages.item(${pageIndex});
             ${layerName !== undefined ? `const layer = doc.layers.itemByName(${JSON.stringify(layerName)});` : ''}
-            const placedItems = page.place(${JSON.stringify(filePath)}, [${x}, ${y}], ${showingOptions}, ${autoflowing}${layerName !== undefined ? ', layer' : ''});
+            const placedItems = page.place(${JSON.stringify(safePath)}, [${x}, ${y}], ${showingOptions}, ${autoflowing}${layerName !== undefined ? ', layer' : ''});
             return { success: true, itemCount: placedItems ? placedItems.length : 1 };
         `;
 

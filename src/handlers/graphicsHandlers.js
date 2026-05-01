@@ -4,6 +4,7 @@
 import { ScriptExecutor } from '../core/scriptExecutor.js';
 import { formatResponse, formatErrorResponse, escapeJsxString } from '../utils/stringUtils.js';
 import { sessionManager } from '../core/sessionManager.js';
+import { validatePath } from '../utils/pathValidator.js';
 
 export class GraphicsHandlers {
     /**
@@ -268,6 +269,13 @@ export class GraphicsHandlers {
             applyObjectStyle = ''
         } = args;
 
+        let safePath;
+        try {
+            safePath = validatePath(filePath, 'filePath');
+        } catch (e) {
+            return formatErrorResponse(e.message, 'Place Image');
+        }
+
         const hasAllCoords = x !== undefined && y !== undefined && width !== undefined && height !== undefined;
         const positioning = hasAllCoords
             ? { x, y, width, height }
@@ -291,7 +299,7 @@ export class GraphicsHandlers {
             rect.geometricBounds = [${positioning.y}, ${positioning.x}, ${positioning.y + positioning.height}, ${positioning.x + positioning.width}];
 
             try {
-                rect.place(${JSON.stringify(filePath)});
+                rect.place(${JSON.stringify(safePath)});
 
                 const objectStyleName = ${JSON.stringify(applyObjectStyle)};
                 if (objectStyleName) {
@@ -301,7 +309,7 @@ export class GraphicsHandlers {
                     } catch(e) {}
                 }
 
-                return { success: true, message: 'Image placed at ' + ${JSON.stringify(filePath)} };
+                return { success: true, message: 'Image placed at ' + ${JSON.stringify(safePath)} };
             } catch(e) {
                 rect.remove();
                 return { success: false, error: 'Failed to place image: ' + e.message };
@@ -313,7 +321,7 @@ export class GraphicsHandlers {
         if (result?.success) {
             sessionManager.setLastCreatedItem({
                 type: 'image',
-                filePath: filePath,
+                filePath: safePath,
                 position: positioning,
                 objectStyle: applyObjectStyle
             });
