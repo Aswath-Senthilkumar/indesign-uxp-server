@@ -660,6 +660,83 @@ Developer Tool (UXP DT side-loads don't survive InDesign restarts —
 `Add Plugin` persists, but `Load` does not). `/status` returned
 `{"connected":true,"queueDepth":0}` once the panel reopened.
 
+### Test 4 — Bridge killed during in-flight request
+
+**Goal:** verify the plugin's WebSocket-close detection and the in-flight
+caller's failure mode when the *bridge* dies mid-flight (inverse of
+Test 3, where the plugin died).
+
+**Method.** Shell-side: fire a 60-second `setTimeout` request, sleep 3
+seconds (so the plugin has received it and is awaiting), kill the bridge
+with `taskkill /F`, hold down 10 seconds, restart. Plugin-side:
+human-observed panel + DevTools.
+
+**Timeline:**
+
+| Time | Event |
+|---|---|
+| 20:50:10.681 | curl fired with 60 s setTimeout body |
+| 20:50:13.847 | bridge killed (`taskkill /F` on PID 55124) |
+| 20:50:15.817 | curl errored out — `HTTP=000`, `TIME=3.92 s` |
+| 20:50:13.847 → ~20:50:24 | bridge down (~10 s observation window) |
+| ~20:50:24 | bridge restarted |
+| ~20:50:29 | bridge logs `[Bridge] Plugin connected` |
+
+curl noticed the dead bridge **~0.7 s after the kill** (3.92 − 3.20).
+Clean connection-reset response, no hang.
+
+**Bridge log delta:**
+
+```
+[Bridge] Sending execute: 2d8b9b49-60b5-4576-9bdc-00cafa52d75a await new Promise(r => setTimeout(r, 60000)); return "late";
+(bridge died here — no further log lines from old session)
+[Bridge] WARNING: BRIDGE_TOKEN not set. ...
+[Bridge] HTTP server on http://127.0.0.1:3000
+[Bridge] WebSocket server on ws://127.0.0.1:3001
+[Bridge] Waiting for UXP plugin to connect...
+[Bridge] Plugin connected
+```
+
+**Plugin DevTools (confirmed by human screenshot):**
+
+```
+[Plugin] DOM OK — open docs: 0
+[Plugin] new Function() OK: 2
+[Plugin] Connected to bridge
+[Plugin] Received: {"type":"execute","id":"2d8b9b49-...","code":"await new Promise(r => setTimeout(r, 60000)); return \"late\";"}
+[Plugin] WebSocket error: v {Symbol(type): "error", Symbol(target): c, ...}    (×7)
+[Plugin] Connected to bridge
+```
+
+The matching request ID in the plugin's "Received" line confirms the
+plugin received and started processing the request before the bridge
+died — i.e., the test really did exercise the in-flight code path, not
+just the precondition. Seven WS error lines × 3 s reconnect interval ≈
+21 s of cycle time (slightly longer than the 13 s downtime because the
+interval doesn't align with the restart instant).
+
+**Plugin-side observations (confirmed by human):**
+
+- Panel flipped to `Disconnected — retrying in 3s` immediately on bridge
+  kill.
+- Panel returned to `Connected to bridge ✓` once reconnect succeeded.
+
+**Orphan-result note.** The plugin's executed code (the 60 s setTimeout)
+was still running inside InDesign at the moment the bridge died. When
+the setTimeout eventually resolves (60 s later), the plugin tries to
+`ws.send(result)` on the now-closed WebSocket — that throws or silently
+drops, depending on the WS library state. The result is not delivered
+to the new bridge connection (the `ws` reference in
+`handleExecute`'s closure is the *old* dead one). Implication for
+Stage 4: the dashboard must not rely on the plugin "remembering"
+in-flight requests across a bridge restart; callers should resubmit
+after a `HTTP=000` / connection-reset response.
+
+**Status: pass.** Bridge-side code path correct (curl fails fast),
+plugin-side recovery correct (auto-reconnect lands), no hang on either
+side, no zombie state. The only nuance is the orphan-result behaviour,
+documented above.
+
 ---
 
 ## Stage 2 verification additions (for Stage 2E)
