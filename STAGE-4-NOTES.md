@@ -289,3 +289,102 @@ cached from prior renders. A cold-start re-run would land closer to
 ### Stage 4.2 status: pass
 
 ---
+
+## Stage 4.3 — Comp picker UI
+
+### Files
+
+| Path | Role |
+|---|---|
+| `dashboard/app/page.tsx` | Server Component: reads `mock-data/comps.json` from disk, passes the comp array as a prop to `<Picker>` |
+| `dashboard/components/picker.tsx` | Client Component (`'use client'`): state, search, selection, render button (stub) |
+| `dashboard/app/api/images/[filename]/route.ts` | GET handler that streams comp images from `mock-data/images/<filename>` to the browser |
+
+The page itself stays a Server Component so we can read `comps.json`
+directly with `fs.promises.readFile` — no `/api/comps` round-trip
+needed. The picker is a Client Component because it needs `useState`
+for selection and search. Data flows once, server → client, as a
+serializable prop.
+
+### Image serving
+
+Images live at `<repo>/mock-data/images/`, outside `dashboard/public/`.
+Rather than copy them into `public/`, a tiny route handler serves them
+on demand:
+
+- The `[filename]` segment is the only user-controlled path on this
+  surface, so it's the one place in Stage 4 that gets explicit
+  path-traversal protection — regex on the name, allow-list on
+  extension, and a `path.resolve()` containment check against
+  `IMAGES_DIR`.
+- Verified live:
+  - `GET /api/images/1325-e-elwood-st.jpg` → 200, `image/jpeg`,
+    208,455 bytes, JPEG magic bytes `ff d8 ff`
+  - `GET /api/images/..%2F..%2Fpackage.json` → 400 `{"error":"invalid filename"}`
+  - `GET /api/images/foo.txt` → 400 `{"error":"unsupported extension"}`
+  - `GET /api/images/no-such-file.jpg` → 404 `{"error":"not found"}`
+
+### UI structure
+
+Top-to-bottom layout per the prompt:
+
+1. Header (`<h1>Team Sheet Renderer</h1>` + one-line subhead)
+2. **Template** label — static `"6-tile sample (template-v2-test)"`,
+   no selector yet (v1 fixes the template).
+3. **Available comps** — `Input` filter with placeholder
+   "Filter by address, city, or state…" + a `<count> of <total>`
+   counter; `<Card>` per comp with thumbnail, address, city/state,
+   `formatSfAc(...)` line, and an **Add** / **Selected** /
+   **Full** button.
+4. **Selected** — count badge `<n> / 6`; numbered list with
+   per-row **Remove** button. Empty-state message when nothing
+   picked.
+5. **Render** button — disabled until exactly 6 comps selected.
+   Hint text below explains the gating.
+
+shadcn primitives used: `Button`, `Input`, `Card`, `Separator`. No
+need for `Select`/`Label` yet (v1 has no template chooser, no form
+fields beyond the search input which has an `aria-label`).
+
+### Selection ordering
+
+First-click-wins ordering. The comps appear in the **Selected**
+list in the order the user added them. No drag-and-drop reordering
+yet — the prompt explicitly defers that to a Hannah follow-up.
+
+### Render button
+
+Stub for Stage 4.3:
+
+```tsx
+function onRender() {
+    // Stage 4.3 stub. Wired to /api/render in Stage 4.4.
+    console.log("render", selectedIds);
+}
+```
+
+Wired up properly in 4.4.
+
+### Verification
+
+`curl http://localhost:4000` returns HTML containing the expected
+section labels (`Available comps`, `Filter by address`, `Render`,
+`Selected`) and the comp addresses (`1325 E Elwood`, `1701 E
+Elwood`, `3635 S 43rd`, etc.). Compile clean — no Next.js / React
+errors in the dashboard log.
+
+Human walked the picker through:
+
+- 7 comps load with thumbnails ✓
+- "elwood" filter narrows to mock-1 + mock-2 ✓
+- "glendale" filter narrows to mock-6 + mock-7 ✓
+- Adding 6 comps populates the Selected list 1-6 ✓
+- The 7th comp's button switches to "Full" ✓
+- Render button gates on exactly-6 ✓
+- Remove + add a different comp updates ordering ✓
+
+Reply: "works just as expected".
+
+### Stage 4.3 status: pass
+
+---
