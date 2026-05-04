@@ -541,3 +541,82 @@ deferred to **Stage 4.6** so the user only does one cycle of UI
 testing rather than two.
 
 ---
+
+## Stage 4.6 — Internal dry run
+
+### Curl-driven scenarios (autonomous)
+
+Three consecutive renders against the live API:
+
+| Run | Comps | Wall | Plugin | Populate | Export | Bytes |
+|---|---|---|---|---|---|---|
+| 1 | last 6 (mock-2..7) | 1.31 s | 1.27 s | 495 ms | 769 ms | 279,173 |
+| 2 | last 6 again | 1.13 s | 1.11 s | 397 ms | 714 ms | 279,174 |
+| 3 | first 6 (mock-1..6) | 1.39 s | 1.37 s | 580 ms | 790 ms | 273,416 |
+
+Confirmations:
+
+- Repeat renders work cleanly — second render of the same input is
+  *faster*, no document leak / no stale state on the bridge or plugin.
+- Switching comp sets produces different-sized PDFs (5,758-byte delta
+  between last-6 and first-6, reflecting different image bytes).
+- 1-byte difference between two identical-input renders is a PDF
+  timestamp; not concerning.
+
+### UI-driven scenarios (human walk-through)
+
+Five checks bundled into one UI cycle (combined with the deferred
+4.5 bridge-cycle error-rendering test):
+
+1. Filter sanity — `elwood` narrows to 1325/1701 E Elwood, `glendale`
+   narrows to 6271/7701, `xyz` shows the empty-state message, clearing
+   restores all 7.
+2. Render gating — disabled at 5 selected, enabled at exactly 6.
+3. Re-render with changed selection — preview updates with new content
+   on the second click; previous blob URL is revoked.
+4. Last-6 selection ordering — adding mock-2..mock-7 in order produces
+   a render with 1701 E Elwood (mock-2) in tile_1, confirming
+   selection order is honored.
+5. Error UI — killing the bridge produces the expected destructive
+   error card in the dashboard with the bridge-unreachable message +
+   actionable hint. Restart bridge, plugin auto-reconnects, next
+   render works without a page reload.
+
+Human reply: "All checks done, and it all works exactly as expected."
+
+### Rough edges fixed during dry run
+
+None. The render pipeline, UI flow, and error handling all behaved
+as intended on the first pass.
+
+### Rough edges deferred to post-Hannah
+
+These are not rough edges in the dashboard itself — they're the
+known carry-overs from earlier stages, repeated here so they're easy
+to find at handoff time:
+
+- `BRIDGE_TOKEN` is still optional. The bridge prints a warning on
+  startup when unset; should `process.exit(1)`. Carried from
+  `safety-report.md` §10. Stage 4 didn't add a binding constraint
+  for this — the dashboard is a single-user localhost-only tool.
+- `plugin/manifest.json` still has `network.domains: "all"`. Should
+  be tightened to a localhost allow-list. Carried from
+  `safety-report.md` §1.
+- 30-second timeout disambiguation: a hard InDesign force-quit
+  during a render produces `"Execution timed out after 30s"` rather
+  than `"Plugin disconnected"` (Stage 2E Test 3). Today the
+  dashboard surfaces that message faithfully via the error card,
+  but if Hannah finds it confusing we could special-case the timeout
+  and surface a more user-friendly "InDesign appears to have stopped
+  responding" message.
+- Single template, no template chooser. Stage 4 v1 is fixed on
+  `template-v2-test`. If Hannah wants more templates we'd add a
+  selector and per-template tile counts.
+- No drag-and-drop reordering of the Selected list. First-click-wins
+  ordering is sufficient for v1; reordering is a Hannah follow-up.
+- No persistence — every refresh resets the selection. Acceptable
+  for a prototype; would matter once brokers actually use this.
+
+### Stage 4.6 status: pass
+
+---
