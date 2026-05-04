@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -27,9 +27,31 @@ function compMatchesQuery(c: Comp, q: string): boolean {
     );
 }
 
+type RenderState =
+    | { kind: "idle" }
+    | { kind: "loading" }
+    | { kind: "success"; blobUrl: string; bytes: number; serverWallMs: number | null }
+    | { kind: "error"; message: string; detail?: string };
+
+interface RenderApiError {
+    error: string;
+    detail?: string;
+    hint?: string;
+    details?: Array<{ field: string; message: string }>;
+}
+
 export default function Picker({ comps }: PickerProps) {
     const [query, setQuery] = useState("");
     const [selectedIds, setSelectedIds] = useState<string[]>([]);
+    const [renderState, setRenderState] = useState<RenderState>({ kind: "idle" });
+
+    // Revoke any blob URL on unmount or when a new render replaces it.
+    useEffect(() => {
+        const url = renderState.kind === "success" ? renderState.blobUrl : null;
+        return () => {
+            if (url) URL.revokeObjectURL(url);
+        };
+    }, [renderState]);
 
     const filtered = useMemo(
         () => comps.filter((c) => compMatchesQuery(c, query)),
@@ -43,6 +65,7 @@ export default function Picker({ comps }: PickerProps) {
     );
 
     const canRender = selectedIds.length === TARGET_COUNT;
+    const isLoading = renderState.kind === "loading";
 
     function add(id: string) {
         if (selectedSet.has(id)) return;
@@ -53,9 +76,76 @@ export default function Picker({ comps }: PickerProps) {
         setSelectedIds((prev) => prev.filter((x) => x !== id));
     }
 
-    function onRender() {
-        // Stage 4.3 stub. Wired to /api/render in Stage 4.4.
-        console.log("render", selectedIds);
+    async function onRender() {
+        if (!canRender || isLoading) return;
+        setRenderState({ kind: "loading" });
+
+        const payload = {
+            template: "template-v2-test",
+            comps: selectedComps,
+        };
+
+        let res: Response;
+        try {
+            res = await fetch("/api/render", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+        } catch (e) {
+            setRenderState({
+                kind: "error",
+                message: "Network error reaching the dashboard.",
+                detail: (e as Error).message,
+            });
+            return;
+        }
+
+        if (!res.ok) {
+            let body: RenderApiError | null = null;
+            try {
+                body = (await res.json()) as RenderApiError;
+            } catch {
+                /* not JSON; leave body null */
+            }
+            const message =
+                body?.error ?? `Render failed (HTTP ${res.status})`;
+            const detail = [
+                body?.hint,
+                body?.detail,
+                body?.details?.map((d) => `${d.field}: ${d.message}`).join("; "),
+            ]
+                .filter(Boolean)
+                .join(" — ");
+            setRenderState({
+                kind: "error",
+                message,
+                detail: detail || undefined,
+            });
+            return;
+        }
+
+        let blob: Blob;
+        try {
+            blob = await res.blob();
+        } catch (e) {
+            setRenderState({
+                kind: "error",
+                message: "Render returned a response we couldn't read as a PDF.",
+                detail: (e as Error).message,
+            });
+            return;
+        }
+
+        const blobUrl = URL.createObjectURL(blob);
+        const wallHeader = res.headers.get("X-Render-Wall-Ms");
+        const serverWallMs = wallHeader ? Number.parseInt(wallHeader, 10) : null;
+        setRenderState({
+            kind: "success",
+            blobUrl,
+            bytes: blob.size,
+            serverWallMs: Number.isFinite(serverWallMs) ? serverWallMs : null,
+        });
     }
 
     return (
@@ -184,17 +274,69 @@ export default function Picker({ comps }: PickerProps) {
             <div className="pt-2">
                 <Button
                     size="lg"
-                    disabled={!canRender}
+                    disabled={!canRender || isLoading}
                     onClick={onRender}
+                    aria-busy={isLoading}
                 >
-                    Render
+                    {isLoading ? "Rendering…" : "Render"}
                 </Button>
                 <p className="mt-2 text-xs text-muted-foreground">
-                    {canRender
-                        ? "Ready to render."
-                        : `Select exactly ${TARGET_COUNT} comps to enable.`}
+                    {isLoading
+                        ? "Calling the bridge — usually 2-10 seconds."
+                        : canRender
+                            ? "Ready to render."
+                            : `Select exactly ${TARGET_COUNT} comps to enable.`}
                 </p>
             </div>
+
+            {renderState.kind === "error" ? (
+                <Card
+                    role="alert"
+                    className="border-destructive/40 bg-destructive/5 p-4"
+                >
+                    <p className="text-sm font-medium text-destructive">
+                        {renderState.message}
+                    </p>
+                    {renderState.detail ? (
+                        <p className="mt-1 text-xs text-destructive/80">
+                            {renderState.detail}
+                        </p>
+                    ) : null}
+                </Card>
+            ) : null}
+
+            {renderState.kind === "success" ? (
+                <section aria-label="Rendered PDF preview">
+                    <div className="flex items-baseline justify-between">
+                        <h2 className="text-sm font-medium text-foreground/80">
+                            Preview
+                        </h2>
+                        <p className="text-xs text-muted-foreground tabular-nums">
+                            {(renderState.bytes / 1024).toFixed(1)} KB
+                            {renderState.serverWallMs !== null
+                                ? ` · ${renderState.serverWallMs} ms server`
+                                : ""}
+                        </p>
+                    </div>
+                    <div className="mt-3 overflow-hidden rounded-md border bg-muted">
+                        <embed
+                            src={renderState.blobUrl}
+                            type="application/pdf"
+                            className="block w-full h-[600px]"
+                            aria-label="Rendered team-sheet PDF"
+                        />
+                    </div>
+                    <div className="mt-3">
+                        <a
+                            href={renderState.blobUrl}
+                            download="team-sheet.pdf"
+                            className="inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium hover:bg-muted"
+                        >
+                            Download PDF
+                        </a>
+                    </div>
+                </section>
+            ) : null}
         </div>
     );
 }

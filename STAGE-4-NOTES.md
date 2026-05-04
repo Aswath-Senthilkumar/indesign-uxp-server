@@ -388,3 +388,74 @@ Reply: "works just as expected".
 ### Stage 4.3 status: pass
 
 ---
+
+## Stage 4.4 — Render button + PDF preview
+
+### What was wired
+
+`dashboard/components/picker.tsx` now does the real `/api/render` call
+when the user hits Render. New state machine inside the picker:
+
+```ts
+type RenderState =
+    | { kind: "idle" }
+    | { kind: "loading" }
+    | { kind: "success"; blobUrl: string; bytes: number; serverWallMs: number | null }
+    | { kind: "error"; message: string; detail?: string };
+```
+
+### Flow
+
+1. `onRender()` early-returns if `!canRender` or already loading.
+2. State → `loading`. Button text becomes **"Rendering…"**, button is
+   disabled, helper text below explains "Calling the bridge — usually
+   2-10 seconds."
+3. `fetch('/api/render', POST, { template, comps })` with the selected
+   comps.
+4. Network failure → state → `error` with the network error message.
+5. Non-OK response → parse JSON `{ error, detail?, hint?, details? }`,
+   compose a friendly message + detail string, state → `error`.
+6. OK response → `await res.blob()`, `URL.createObjectURL(blob)`, read
+   `X-Render-Wall-Ms` header, state → `success`.
+7. `useEffect` cleanup revokes the blob URL when the state moves on
+   (next render or component unmount).
+
+### Preview UI
+
+Renders below the Render button when `state.kind === "success"`:
+
+- Header line "Preview" + tiny stats on the right
+  (`<size> KB · <wallMs> ms server`)
+- `<embed src={blobUrl} type="application/pdf" />` in a bordered
+  rounded container, fixed 600 px height
+- Below: a **Download PDF** anchor (`<a href={blobUrl}
+  download="team-sheet.pdf">`). The browser handles the save.
+
+### Error UI
+
+Renders below the Render button when `state.kind === "error"`:
+
+- A `Card` with `role="alert"`, destructive styling
+- Bold message line + optional secondary detail line
+
+This pattern surfaces the bridge's own error text faithfully — for
+example, a "bridge unreachable" 503 will show the route handler's
+hint ("start the bridge: cd bridge && node server.js") in the detail
+line. Stage 4.5 will exercise these error paths deliberately.
+
+### Verification
+
+Human walked the full flow:
+
+- Selected 6 comps in the picker
+- Clicked Render — loading state visible, button disabled
+- Preview appeared inline within ~2 seconds
+- Download saved `team-sheet.pdf` correctly
+- Saved PDF opens correctly and matches the `/api/render` curl output
+
+Reply: "Perfect, works exactly like expected and renders a team-sheet
+inline and allows download."
+
+### Stage 4.4 status: pass
+
+---
