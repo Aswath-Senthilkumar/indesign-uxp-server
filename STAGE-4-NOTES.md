@@ -459,3 +459,85 @@ inline and allows download."
 ### Stage 4.4 status: pass
 
 ---
+
+## Stage 4.5 — Polish
+
+Worked through the prompt's priority list. Most of what it asked for was
+already in place from earlier sub-stages; this pass verified each axis and
+tightened the visual side.
+
+### 1. Error handling — exercised end-to-end
+
+All error paths return clean structured JSON with appropriate HTTP
+status; the picker's error Card surfaces them faithfully.
+
+| Trigger | HTTP | Server JSON |
+|---|---|---|
+| Bridge process killed | 503 | `{"error":"bridge unreachable on 127.0.0.1:3000","hint":"start the bridge: cd bridge && node server.js","detail":"fetch failed"}` |
+| Plugin disconnected (bridge up but plugin unloaded) | 503 | `{"error":"bridge says plugin not connected","hint":"open InDesign with the Bridge Panel; …"}` |
+| 5 comps instead of 6 | 400 | `{"error":"validation failed","details":[{"field":"comps","message":"expected 6 comps, got 5"}]}` |
+| Missing field / wrong type | 400 | `{"error":"validation failed","details":[{"field":"comps[2].address","message":"missing"},{"field":"comps[3].building_sf","message":"expected number, got string"}]}` |
+| `image_filename` points at non-existent file | 400 | `{"error":"image files missing or too small","missing":["no-such-image.jpg"]}` |
+| Wrong template name | 400 | `{"error":"validation failed","details":[{"field":"template","message":"only \"template-v2-test\" is supported in v1"}]}` |
+
+The picker composes `body.error` as the alert title and `[hint, detail,
+details...]` joined by " — " as the secondary line, so e.g. the
+bridge-down error renders as:
+
+```
+bridge unreachable on 127.0.0.1:3000
+start the bridge: cd bridge && node server.js — fetch failed
+```
+
+— which is actionable without copying anything from a console.
+
+Verified the bridge-restart path doesn't poison the dashboard's
+state: kill bridge → 503 in UI → restart bridge → plugin
+auto-reconnects within ~3 s → next render request goes through
+without a page reload.
+
+### 2. Loading states
+
+- Render button: `disabled` + text → `"Rendering…"` + `aria-busy="true"`
+  + helper line `"Calling the bridge — usually 2-10 seconds."` while
+  the request is in flight (Stage 4.4).
+- Comp list: this is a Server Component; HTML arrives already
+  populated. No client-side load skeleton needed.
+- Preview pane: only rendered after first success. Pre-render the page
+  shows nothing where the preview will appear, which is fine — adding
+  an idle placeholder would be visual noise on first load.
+
+### 3. Empty states
+
+- Filter no-match: `"No comps match "elwood"."` (already present from
+  4.3).
+- Selected list empty: `"Nothing selected yet — add comps from the
+  list above."` (already present from 4.3).
+
+### 4. Visual polish
+
+- Comp cards now have a `transition-colors` hover effect:
+  - default: `hover:bg-muted/30` for hoverable ones
+  - selected: subtle background tint + softer border
+    (`border-foreground/20 bg-muted/40`)
+  - at-cap (six already picked, this row not selected): `opacity-60`
+    plus the disabled Add button → "Full"
+- Header copy slightly tightened on the page (added a one-line
+  subhead in 4.3).
+- Stuck with shadcn defaults for typography and spacing per the
+  prompt's "use shadcn defaults where possible" guidance.
+
+### 5. Image thumbnails
+
+Bumped from 56 × 56 to **60 × 60** to match the prompt literally.
+`object-cover`, rounded corners, `loading="lazy"`, explicit
+`width`/`height` attributes for layout-shift avoidance. No further
+changes — already lazy, already rounded.
+
+### Stage 4.5 status: pass
+
+Verification of UI-side error rendering during a bridge cycle is
+deferred to **Stage 4.6** so the user only does one cycle of UI
+testing rather than two.
+
+---

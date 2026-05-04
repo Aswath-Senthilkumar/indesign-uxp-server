@@ -193,13 +193,23 @@ export default function Picker({ comps }: PickerProps) {
                                 !isSelected && selectedIds.length >= TARGET_COUNT;
                             return (
                                 <li key={c.id}>
-                                    <Card className="flex flex-row items-center gap-3 p-3">
+                                    <Card
+                                        className={`flex flex-row items-center gap-3 p-3 transition-colors ${
+                                            isSelected
+                                                ? "border-foreground/20 bg-muted/40"
+                                                : atCap
+                                                    ? "opacity-60"
+                                                    : "hover:bg-muted/30"
+                                        }`}
+                                    >
                                         {/* eslint-disable-next-line @next/next/no-img-element */}
                                         <img
                                             src={imageSrc(c.image_filename)}
                                             alt=""
                                             loading="lazy"
-                                            className="h-14 w-14 rounded-md object-cover bg-muted shrink-0"
+                                            width={60}
+                                            height={60}
+                                            className="h-[60px] w-[60px] rounded-md object-cover bg-muted shrink-0"
                                         />
                                         <div className="flex-1 min-w-0">
                                             <p className="truncate text-sm font-medium">
