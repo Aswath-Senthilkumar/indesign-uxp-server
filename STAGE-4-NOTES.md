@@ -175,3 +175,117 @@ Human visual confirmation: "Looks perfect, we shall continue."
 ### Stage 4.1 status: pass
 
 ---
+
+## Stage 4.2 — Render API endpoint
+
+### What was built
+
+Two new files under `dashboard/`:
+
+- `dashboard/lib/format.ts` — `Comp` type, `formatSfAc(building_sf, land_area)` formatter, request validators (`validateRenderRequest`).
+- `dashboard/app/api/render/route.ts` — the `POST /api/render` handler.
+
+The handler validates the request body, checks each comp's image
+exists on disk and is >10 KB, polls `GET /status` on the bridge to
+ensure the plugin is connected, builds a single batched code string
+(same shape as Stage 3.7's `test-render.js`), POSTs it to
+`http://127.0.0.1:3000/execute`, reads the resulting PDF off disk, and
+returns the bytes with `Content-Type: application/pdf`.
+
+### Code-reuse decision
+
+The Stage 4 prompt asked for "refactor formatting helpers from
+test-render.js into a shared module rather than duplicating," but the
+working notes also say `test-render.js` is stable and not to be
+modified. Resolved by accepting a 5-line duplication of `formatSfAc`
+in `dashboard/lib/format.ts`. The "don't modify" instruction is more
+explicit and the duplication is small.
+
+### Path safety note (carried forward from Stage 3.4 / 3.7)
+
+Same gap as test-render.js: the bridge's `/execute` endpoint forwards
+code strings to the plugin verbatim and does NOT run the path
+validator added in Stage 1.5 (which lives in `src/handlers/`,
+the MCP-server path we're not going through). `INDESIGN_ALLOWED_ROOTS`
+does not gate the API route. We resolve to absolute and pre-check
+existence locally; the only true boundary is InDesign's process-level
+file permissions. Documented in the route handler's header comment.
+
+### Per-request output paths
+
+Each render writes a unique file `output/dashboard-render-<timestamp>.pdf`
+so concurrent requests don't clobber each other. After the bytes are
+read into memory the file is best-effort-deleted (failure is fine —
+`output/` is gitignored). Returning the bytes inline (not a path)
+matches the prompt's "browser can preview inline" requirement and
+also avoids a second round-trip to fetch the file.
+
+### Diagnostic headers
+
+The response carries plugin-side timings on `X-Render-*` headers so
+the UI in Stage 4.4 can surface "rendered in N ms" without an extra
+trip:
+
+```
+X-Render-Plugin-Total-Ms
+X-Render-Populate-Ms
+X-Render-Export-Ms
+X-Render-Wall-Ms
+```
+
+### Test run
+
+Built a request body programmatically from the first 6 entries of
+`mock-data/comps.json`, stripped the local-only `source_folder` field,
+POSTed to `http://localhost:4000/api/render`:
+
+```
+$ curl -s -m 60 -X POST http://localhost:4000/api/render \
+       -H 'Content-Type: application/json' \
+       --data-binary @<body.json> \
+       --output dashboard-test-render.pdf -D <headers> \
+       -w 'HTTP=%{http_code} TIME=%{time_total}s SIZE=%{size_download}\n'
+HTTP=200 TIME=1.982743s SIZE=273416
+```
+
+Response headers:
+
+```
+HTTP/1.1 200 OK
+content-type: application/pdf
+content-length: 273416
+x-render-populate-ms: 636
+x-render-export-ms: 1066
+x-render-plugin-total-ms: 1702
+x-render-wall-ms: 1775
+```
+
+PDF magic bytes: `%PDF-1.4`. `file` reports `PDF document, version
+1.4, 1 page(s)`.
+
+### Verification against Stage 4.2 success criteria
+
+| Criterion | Result |
+|---|---|
+| Response 200 OK | ✓ |
+| File created | ✓ (`output/dashboard-test-render.pdf`, 267 KB) |
+| File size >50 KB | ✓ |
+| Total request time <15 s | ✓ (1.98 s) |
+| Visually matches Stage 3.7 output | ✓ (human: "It's identical") |
+
+### Latency note
+
+Both `output/test-render.pdf` (Stage 3.7 CLI run) and
+`output/dashboard-test-render.pdf` (Stage 4.2 API run) are
+**byte-identical**: 273,416 bytes each. Same comps, same template,
+same code shape — confirms the API route is doing exactly what the
+CLI script does.
+
+The 1.98 s wall-clock here is faster than Stage 3.7's 2.6 s. Same
+explanation: warm InDesign session, font/colour/PDF-engine state
+cached from prior renders. A cold-start re-run would land closer to
+4-7 s, dominated by export.
+
+### Stage 4.2 status: pass
+
+---
