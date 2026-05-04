@@ -10,6 +10,102 @@ flagging for the post-Hannah review (Liam → Jon → Max).
 
 ---
 
+## Stage 4 — One-page summary
+
+**Branch:** `analysis/initial-pass`
+**Reference tags:** `stage-1.5-complete` at `1ee2156`,
+`stage-3-complete` at `e2ed837`, `stage-3.7-complete` at `7dd464c`.
+**Commits added in Stage 4:** **8** — six per sub-stage plus this
+wrap-up plus the tag.
+
+### Sub-stages completed
+
+| | Status | Commit |
+|---|---|---|
+| 4.1 Scaffold dashboard (Next.js 16 + shadcn, port 4000) | ✅ pass | `4f7b609` |
+| 4.2 `POST /api/render` endpoint | ✅ pass | `6d81388` |
+| 4.3 Comp picker UI + image API | ✅ pass | `0c2fe7c` |
+| 4.4 Render button + PDF preview | ✅ pass | `0845503` |
+| 4.5 Polish (errors, loading, empties, visual, thumbnails) | ✅ pass | `ddc47e2` |
+| 4.6 Internal dry run | ✅ pass | `ceec37a` |
+| 4.7 Wrap-up | this commit | (this) |
+
+### Render-time observations across all runs
+
+Wall-clock latencies for `POST /api/render` measured from a curl
+caller, against a warm InDesign session:
+
+| Source | Wall | Plugin | Populate | Export |
+|---|---|---|---|---|
+| 4.2 first call | 1.98 s | 1.70 s | 636 ms | 1066 ms |
+| 4.6 last 6 (cold of session) | 1.31 s | 1.27 s | 495 ms | 769 ms |
+| 4.6 last 6 again (repeat) | 1.13 s | 1.11 s | 397 ms | 714 ms |
+| 4.6 first 6 (switched comps) | 1.39 s | 1.37 s | 580 ms | 790 ms |
+
+**Median ~1.35 s, max ~1.98 s** for the API call alone. Browser-side
+end-to-end (preview rendered in `<embed>`) is essentially the same
+plus a few ms of blob handling.
+
+A *cold* InDesign session (first export of a fresh launch) would push
+export back to the ~6 s seen in Stage 3.4. We treat the 1-2 s number
+as the steady-state once a render is underway. Comfortably under
+master-app's eventual UX budget.
+
+### Rough edges fixed during dry run
+
+None. The render pipeline, UI flow, and error handling all behaved as
+intended on first pass.
+
+### Rough edges deferred to post-Hannah
+
+These are not dashboard-side issues — they're known carry-overs from
+earlier stages, repeated for handoff visibility:
+
+- `BRIDGE_TOKEN` is still optional. Should `process.exit(1)` when
+  unset (`safety-report.md` §10). Stage 4 didn't add a binding
+  constraint — the dashboard is a single-user localhost tool.
+- `plugin/manifest.json` `network.domains` is still `"all"` — should
+  be tightened to a localhost allow-list (`safety-report.md` §1).
+- 30-second timeout disambiguation: hard force-quit of InDesign
+  surfaces `"Execution timed out after 30s"` rather than
+  `"Plugin disconnected"` (Stage 2E Test 3). The dashboard renders the
+  message faithfully; if Hannah finds it confusing we can special-case
+  the timeout to surface "InDesign appears to have stopped responding."
+- Single template, no chooser — fixed on `template-v2-test` for v1.
+- No drag-and-drop reordering — first-click-wins ordering is enough.
+- No persistence — refresh resets the selection.
+- Dashboard runs same-machine as the bridge. master-app placement
+  (inside master-app vs standalone) is deferred until Max sees this.
+
+### Hannah review prerequisites — all met
+
+| | |
+|---|---|
+| Picks a template | static label in v1 (one option), per the prompt |
+| Searches and selects six comps | filter input + per-card Add button |
+| Orders the selected comps | first-click-wins ordering, numbered list |
+| Hits render | enabled-only-at-6 button with loading state |
+| Sees an inline preview | `<embed type="application/pdf">`, 600 px |
+| Downloads the PDF | anchor with `download="team-sheet.pdf"` |
+
+### Substrate state
+
+At this commit:
+
+- Bridge: process **6644** (PID at the time of writing) listening on
+  `127.0.0.1:3000` (HTTP) and `127.0.0.1:3001` (WebSocket).
+- Plugin: connected (verified via `GET /status`).
+- Dashboard dev server: running on `127.0.0.1:4000` via `pnpm dev`.
+- InDesign 21.3 (= 2026): open with `template-v2-test.indd` as the
+  active document.
+
+### Tag
+
+`stage-4-complete` at this commit. Push pending user authorisation —
+will ask before pushing.
+
+---
+
 ## Prerequisites — verified at start
 
 - `STAGE-3-NOTES.md` exists at repo root
