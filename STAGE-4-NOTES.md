@@ -716,3 +716,106 @@ to find at handoff time:
 ### Stage 4.6 status: pass
 
 ---
+
+## Per-render template copy (post–4.7 follow-up)
+
+Goal: stop mutating `templates/template-v2-test.indd` in place. Original
+should be an immutable read-only asset; each render gets its own
+working copy that is created, mutated, exported, and disposed.
+
+### What was tried first: on-disk working copy
+
+The user's stated approach was `fs.copyFile(template, working/render-{ts}.indd)` →
+`app.open(working)` → populate → export → `doc.close(SaveOptions.no)` →
+`fs.unlink(working)`. Implemented in `dashboard/lib/render-script.mjs`,
+the dashboard route, and the CLI script.
+
+**Blocker found during verification:** `Document.close(SaveOptions.no)`
+in InDesign 2026 + UXP plugin context is a **no-op for documents
+opened from a real on-disk path**. Six probe scenarios confirmed:
+
+| Probe | Setup | Result |
+|---|---|---|
+| 1 | Open from disk → `await doc.close(SaveOptions.no)` | Returns `undefined` (sync), no error, doc stays in `app.documents` |
+| 2 | Same + 100/500/1000 ms event-loop yields | Doc still open at 1 s, `isValid: true`, name still readable |
+| 3 | `app.documents.everyItem().close(SaveOptions.no)` (batch) | No effect |
+| 3 | `doc.close()` (no arg) | No effect |
+| 3 | `doc.close(numeric SaveOptions.NO)` | Throws — `Invalid value… Expected SaveOptions enumerator` (so close *does* validate args; it just won't act on them) |
+| 4 | Open with `showingWindow=true` → close | Window count 1→0 ✓, but doc count stays |
+| 6 | `app.documents.add()` (fresh Untitled) → close | Even **fresh untitled** docs don't close — broader UXP plugin context limitation, not specific to opens-from-disk |
+
+`UserInteractionLevels.neverInteract` was set throughout — not a
+modal-prompt issue. The user verified the manual-open path hits a
+font-substitution dialog; the programmatic path with `neverInteract`
+suppresses the dialog but lands the doc in a wedged "headless"
+state (`windows.length === 0`), and close is broken regardless.
+
+### Pivot: `OpenOptions.openCopy` (in-memory copy)
+
+User suggested investigating the font-handling angle. While probing,
+discovered `OpenOptions.openCopy` opens the file content as a
+fresh **untitled document** (`Untitled-N`, no `fullName`, `saved: false`).
+Critically:
+
+- The original disk file is never bound to a Document handle, so no
+  file lock is held and no save can ever target the original.
+- `Document.close(SaveOptions.no)` **works correctly** on these
+  untitled docs (verified — `1 -> 0` immediately).
+- No `fs.copyFile`, no `fs.unlink`, no `output/working/` directory.
+
+This satisfies the user's original motivations more cleanly than the
+on-disk approach:
+
+| Goal | On-disk working copy | `OpenOptions.openCopy` |
+|---|---|---|
+| Original immutable | ✓ (never opened) | ✓ (opened in copy mode, never bound to disk path) |
+| Per-render isolation | ✓ (separate file) | ✓ (separate Untitled-N) |
+| No stale state | ✓ (fresh open per render) | ✓ (fresh untitled per render) |
+| Working copy created → disposed | ✓ on disk | ✓ purely in memory; close works |
+| File lock on original | n/a (never held) | n/a (never held) |
+| Renders work | depends on broken close | works |
+| Disk I/O per render | one fs.copyFile | none |
+| Orphan risk | high (close broken) | none |
+
+### Implementation
+
+- `dashboard/lib/render-script.mjs` — shared bridge-code builder.
+  Sets `app.scriptPreferences.userInteractionLevel = neverInteract`
+  before open, calls `await app.open(templatePath, true, OpenOptions.openCopy)`,
+  populates, exports, closes (which works for openCopy docs). Errors
+  in the close are surfaced as `closeWarning` on the result so we
+  don't lose visibility.
+- `dashboard/app/api/render/route.ts` — drops `fs.copyFile`,
+  `fs.unlink`, `WORKING_DIR`, and `crypto` imports. Just verifies
+  template exists, calls bridge, reads PDF, returns. Surfaces
+  `closeWarning` (if any) as `X-Render-Close-Warning` header.
+- `test-render.js` — same shape: drops working-copy plumbing, passes
+  template path directly to `buildBridgeCode`.
+- `.gitignore` — reverted the `output/working/` comment (directory
+  is no longer used; `output/` rule still covers any stray files).
+
+### Verification
+
+| Step | Expected | Got |
+|---|---|---|
+| Template SHA256 baseline | `51f4cae7dff66e1190b8bb4904e567064381b0cd6354aad8ba70ffb786717844` | recorded |
+| Dashboard render via `/api/render` (6 comps) | 200, valid PDF, hash unchanged | 200, 273,416 B PDF, populate 1928 ms, export 996 ms, wall 4 s |
+| Template SHA256 after dashboard render | identical to baseline | `51f4cae7…` ✓ |
+| `app.documents.length` after dashboard render | 0 | 0 ✓ |
+| `output/working/` after dashboard render | n/a (dir removed) | n/a |
+| CLI render (`node test-render.js`) | exit 0, valid PDF, hash unchanged | exit 0, 267 KB PDF, total 2.96 s wall |
+| Template SHA256 after CLI render | identical to baseline | `51f4cae7…` ✓ |
+| `app.documents.length` after CLI render | 0 | 0 ✓ |
+| Error-path coverage | bridge-down 503 hint, plugin-disconnected 503, validation 400, missing-image 400 | all carried over from Stage 4.5 — no on-disk cleanup needed because there's no on-disk working copy to leak |
+
+The on-disk working-copy approach was never going to satisfy "no
+orphans on disk" given the close limitation. The in-memory variant
+satisfies it by construction.
+
+### Status: pass
+
+Original template at `templates/template-v2-test.indd` is verified
+read-only across both code paths. Both renders close their docs
+cleanly. No file lock, no orphan accumulation in `app.documents`.
+
+---

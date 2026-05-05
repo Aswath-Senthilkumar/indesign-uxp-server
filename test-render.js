@@ -1,22 +1,28 @@
 #!/usr/bin/env node
 /**
- * Stage 3.4 / 3.7 render script.
+ * Stage 3.4 / 3.7 / 4.x render script.
  *
- * Reads mock-data/comps.json, populates N tiles (1..N) of
- * templates/template-v2-test.indd, and exports one PDF.
+ * Reads mock-data/comps.json, populates N tiles (1..N) of the
+ * `templates/template-v2-test.indd` template, and exports one PDF to
+ * `output/test-render.pdf`.
  *
- * Stage 3.7 change vs 3.4: the entire populate-and-export sequence is
- * now sent as a single /execute call rather than one POST per
- * operation. This trims HTTP+WebSocket round-trip overhead and lets the
- * plugin batch all DOM mutations under a single new Function(...)
- * compile. The substrate sees one undo step covering the whole render
- * (per the bridge's serial-queue invariant), which also matches our
- * "render is atomic from the user's POV" intent.
+ * Stage 3.7: populate+export atomic via a single /execute call (the
+ * bridge-side code is built by dashboard/lib/render-script.mjs, shared
+ * with the dashboard's API route).
+ *
+ * Stage 4.x: the original template is treated as immutable. Rather
+ * than copying the file to disk, the bridge code uses
+ * `OpenOptions.openCopy` to load the file content into a fresh
+ * untitled InDesign document — the original disk file is never opened
+ * or locked. After populate + export, the untitled doc is closed
+ * (which actually works for openCopy docs; close on a path-backed doc
+ * is a no-op in this UXP / InDesign 2026 build, see
+ * dashboard/lib/render-script.mjs for the full investigation notes).
  *
  * Usage:
- *   node test-render.js                    # first 6 comps -> tiles 1..6
- *   node test-render.js --id mock-3        # one tile (tile_1 = mock-3)
- *   node test-render.js --ids mock-2,mock-7  # N tiles in given order
+ *   node test-render.js                       # first 6 comps -> tiles 1..6
+ *   node test-render.js --id mock-3           # one tile (tile_1 = mock-3)
+ *   node test-render.js --ids mock-2,mock-7   # N tiles in given order
  *
  * Pre-flight: comp + image existence + bridge connection are checked
  * locally before the bridge call.
@@ -29,14 +35,15 @@
  * process-level file permissions.
  */
 
-import { readFileSync, mkdirSync, statSync } from 'node:fs';
+import { promises as fs, statSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildBridgeCode } from './dashboard/lib/render-script.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const BRIDGE_URL = 'http://127.0.0.1:3000';
-const TEMPLATE_NAME = 'template-v2-test.indd';
+const TEMPLATE_REL = 'templates/template-v2-test.indd';
 const OUTPUT_PDF_REL = 'output/test-render.pdf';
 const COMPS_PATH_REL = 'mock-data/comps.json';
 const IMAGES_DIR_REL = 'mock-data/images';
@@ -78,8 +85,6 @@ function formatSfAc(building_sf, land_area) {
     return `±${sf} SF | ±${ac} AC`;
 }
 
-const lit = (s) => JSON.stringify(s);
-
 function selectComps(comps, args) {
     if (args.ids) {
         const wanted = args.ids.split(',').map(s => s.trim()).filter(Boolean);
@@ -100,14 +105,9 @@ function selectComps(comps, args) {
 async function main() {
     const args = parseArgs(process.argv);
 
-    // === pre-flight ===
     const compsPath = resolve(__dirname, COMPS_PATH_REL);
-    let comps;
-    try {
-        comps = JSON.parse(readFileSync(compsPath, 'utf8'));
-    } catch (e) {
-        throw new Error(`could not read ${compsPath}: ${e.message}`);
-    }
+    const compsRaw = await fs.readFile(compsPath, 'utf8');
+    const comps = JSON.parse(compsRaw);
     if (!Array.isArray(comps) || comps.length === 0) {
         throw new Error(`${compsPath} has no entries`);
     }
@@ -115,11 +115,10 @@ async function main() {
     let selected = selectComps(comps, args);
     if (selected.length === 0) throw new Error('no comps selected');
     if (selected.length > MAX_TILES) {
-        console.warn(`warning: ${selected.length} comps requested, only first ${MAX_TILES} will be rendered (template has 6 tiles)`);
+        console.warn(`warning: ${selected.length} comps requested, only first ${MAX_TILES} will be rendered`);
         selected = selected.slice(0, MAX_TILES);
     }
 
-    // Build per-tile data with absolute image paths and pre-formatted strings.
     const tiles = selected.map((comp, i) => {
         const image = resolve(__dirname, IMAGES_DIR_REL, comp.image_filename);
         let imgStat;
@@ -138,23 +137,26 @@ async function main() {
         };
     });
 
+    const templatePath = resolve(__dirname, TEMPLATE_REL);
+    try { await fs.access(templatePath); }
+    catch { throw new Error(`template not found: ${templatePath}`); }
+
     const outputPdf = resolve(__dirname, OUTPUT_PDF_REL);
-    mkdirSync(dirname(outputPdf), { recursive: true });
+    await fs.mkdir(dirname(outputPdf), { recursive: true });
 
     const status = await bridgeStatus();
     if (!status.connected) throw new Error('bridge says plugin not connected — open InDesign + Bridge Panel');
 
-    // === log selection ===
-    console.log(`Bridge:   ${BRIDGE_URL}  connected=${status.connected}`);
-    console.log(`Output:   ${outputPdf}`);
+    console.log(`Bridge:        ${BRIDGE_URL}  connected=${status.connected}`);
+    console.log(`Template:      ${templatePath}  (read-only, opened via OpenOptions.openCopy)`);
+    console.log(`Output PDF:    ${outputPdf}`);
     console.log(`Tiles (${tiles.length}):`);
     for (const t of tiles) {
         console.log(`  tile_${t.n}  ${t.id}  ${t.address}, ${t.city_state}  ${t.sf_ac}  (${t.imageSizeKB.toFixed(0)} KB)`);
     }
     console.log('');
 
-    // Tiles serialized into the in-plugin code as a JS literal.
-    // We strip caller-side metadata (id, imageSizeKB) since the plugin doesn't need them.
+    // Strip caller-side metadata (id, imageSizeKB) from the bridge payload.
     const pluginTiles = tiles.map(t => ({
         n: t.n,
         address: t.address,
@@ -163,75 +165,19 @@ async function main() {
         image: t.image,
     }));
 
-    const code = `
-        const { FitOptions, ExportFormat } = require('indesign');
-        const doc = app.activeDocument;
-        if (!doc) return { ok: false, error: 'no active document' };
-        if (doc.name !== ${lit(TEMPLATE_NAME)}) {
-            return { ok: false, error: 'wrong active document: ' + doc.name };
-        }
-
-        const tiles = ${JSON.stringify(pluginTiles)};
-        const t0 = Date.now();
-        const tileTimes = [];
-
-        for (const t of tiles) {
-            const tStart = Date.now();
-            const prefix = 'tile_' + t.n + '_';
-
-            const fa = doc.textFrames.itemByName(prefix + 'address');
-            if (!fa.isValid) return { ok: false, error: prefix + 'address not found' };
-            fa.contents = t.address;
-
-            const fc = doc.textFrames.itemByName(prefix + 'city_state');
-            if (!fc.isValid) return { ok: false, error: prefix + 'city_state not found' };
-            fc.contents = t.city_state;
-
-            const fs = doc.textFrames.itemByName(prefix + 'sf_ac');
-            if (!fs.isValid) return { ok: false, error: prefix + 'sf_ac not found' };
-            fs.contents = t.sf_ac;
-
-            const rect = doc.rectangles.itemByName(prefix + 'photo');
-            if (!rect.isValid) return { ok: false, error: prefix + 'photo not found' };
-            try { rect.place(t.image); }
-            catch (e) { return { ok: false, error: 'place failed for tile ' + t.n + ': ' + (e.message || String(e)) }; }
-            try { rect.fit(FitOptions.fillProportionally); }
-            catch (e) { return { ok: false, error: 'fit failed for tile ' + t.n + ': ' + (e.message || String(e)) }; }
-
-            tileTimes.push({ n: t.n, ms: Date.now() - tStart });
-        }
-
-        const populateMs = Date.now() - t0;
-        const exportStart = Date.now();
-        try {
-            await doc.exportFile(ExportFormat.pdfType, ${lit(outputPdf)}, false);
-        } catch (e) {
-            return { ok: false, error: 'export failed: ' + (e.message || String(e)) };
-        }
-        const exportMs = Date.now() - exportStart;
-
-        return {
-            ok: true,
-            populateMs,
-            exportMs,
-            totalMs: Date.now() - t0,
-            tileTimes
-        };
-    `;
-
     const callStart = Date.now();
-    const result = await execute(code);
+    const result = await execute(buildBridgeCode(templatePath, outputPdf, pluginTiles));
     const wallMs = Date.now() - callStart;
 
     if (!result || !result.ok) {
-        throw new Error(result?.error || 'render returned no result');
+        const detail = result?.error || 'render returned no result';
+        throw new Error(detail);
     }
 
     let pdfStat;
     try { pdfStat = statSync(outputPdf); }
     catch { throw new Error(`PDF not produced at ${outputPdf}`); }
 
-    // === report ===
     console.log('Per-tile (in plugin):');
     for (const t of result.tileTimes) {
         console.log(`  tile_${t.n}: ${t.ms} ms`);
@@ -243,7 +189,9 @@ async function main() {
     console.log(`Export   (in plugin):  ${result.exportMs} ms`);
     console.log(`Plugin total:          ${result.totalMs} ms`);
     console.log(`Wall clock (caller):   ${wallMs} ms`);
-    console.log(`HTTP+WS overhead:      ${wallMs - result.totalMs} ms`);
+    if (result.closeWarning) {
+        console.log(`Close warning:         ${result.closeWarning}`);
+    }
     console.log('');
     console.log(`PDF: ${outputPdf}  (${(pdfStat.size / 1024).toFixed(1)} KB)`);
 }
