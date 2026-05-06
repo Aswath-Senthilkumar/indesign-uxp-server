@@ -704,3 +704,97 @@ Reply: "Everything works just as expected."
 ### Stage 5.5 status: pass
 
 ---
+
+## Stage 5.6 — Internal dry run
+
+Six curl-driven scenarios against the live API: three happy paths
+(different comp combinations and override sets) and three edge cases
+(validation, unknown template, whitespace overrides).
+
+### Results
+
+| | Scenario | HTTP | Wall | Bytes | `X-Render-Applied-Overrides` |
+|---|---|---|---|---|---|
+| A | first 6, no overrides | 200 | 3.66 s | 273,416 | (none) |
+| B | last 6 (mock-2..mock-7), title only | 200 | 4.12 s | 279,226 | `page_title` |
+| C | first 6 reversed, both overrides | 200 | 3.64 s | 272,977 | `page_title,page_tagline` |
+| D | 5 comps (validation) | 400 | — | — | `{"error":"validation failed","details":[{"field":"comps","message":"expected 6 comps (per tile_count), got 5"}]}` |
+| E | unknown template_id | 404 | — | — | `{"error":"unknown template_id: nonexistent-template"}` |
+| F | `title: ""` + `tagline: "   "` | 200 | 3.73 s | 273,219 | `page_tagline` (only) |
+
+### Confirmations
+
+- **Latency stays in the 3.6-4.1 s wall band** for every happy-path
+  render. Within the Stage 4 expectations.
+- **Different comp sets produce different bytes.** A (first 6) =
+  273,416. B (last 6) = 279,226. C (first 6 reversed) = 272,977. So
+  comp set + ordering both affect output, as expected.
+- **Validation rejects cleanly.** D returns the exact
+  "expected N comps (per tile_count), got M" message the new
+  validator emits.
+- **Manifest lookup rejects cleanly.** E returns the route's 404 with
+  the unknown id echoed.
+- **`app.documents.length === 0` after all 6 calls** — close path
+  solid, no orphan docs.
+- **Template SHA256 unchanged** across the 6 runs:
+  `fc8f844c0ba707b06db0e9e73b118a053318387519813e0cc7b0ee2672ce010e`.
+  The original `Recently_Leased_IOS.indd` is byte-identical before
+  and after — `OpenOptions.openCopy` invariant intact.
+
+### Rough edges
+
+#### F — whitespace-only override is applied as 3-spaces (not blocked)
+
+Sending `tagline: "   "` (three spaces) caused the route handler to
+forward the override to the bridge, which dutifully replaced the
+template's tagline with three space characters. The route's drop
+condition is currently:
+
+```ts
+if (frame && value.length > 0) {
+    bridgeOverrides.push({ frame, value });
+}
+```
+
+`"   ".length === 3 > 0`, so it passes. The fix would be
+`value.trim().length > 0`. The UI never lets this happen — the
+edit-page Render button gates on `valueFor(field).trim().length > 0`
+across all fields — so the issue only surfaces against direct API
+callers.
+
+**Decision:** **deferred**. The UI can't trigger it; a direct API
+caller who types whitespace probably means it. Documented for
+post-Hannah cleanup.
+
+#### Page-fields error path — Render still enabled
+
+If `/api/templates/[id]/page-fields` fails (bridge transient hiccup
+between Comps stage and Edit stage), the edit-page surfaces a
+destructive Card explaining the problem. The Render button stays
+enabled, falling back to the template's defaults (no overrides
+sent). This is the right behavior — let the user render rather than
+block them entirely — but the helper text doesn't currently note it.
+Acceptable for v1; could be a one-line UX tweak later.
+
+#### `\r` in current_value of tagline read-back
+
+The template's `page_tagline` frame contains a trailing `\r` (CR)
+which the read-back endpoint returns verbatim. The text input
+preserves it on edit. If the user clears the field and retypes, the
+`\r` is dropped and a normal text run is sent on render — InDesign
+handles either form. Not a defect, just a quirk worth knowing.
+
+### Things deliberately NOT tested in the dry run
+
+- **Multiple templates.** Manifest only has one entry. New templates
+  will be tested when added.
+- **Concurrent renders.** The bridge serializes via its queue
+  (verified in Stage 2E). No new concurrency surface introduced in
+  Stage 5.
+- **Bridge-down / plugin-disconnected paths.** Already tested in
+  Stage 4.5 / 4.6; nothing in Stage 5 changed those code paths
+  meaningfully.
+
+### Stage 5.6 status: pass
+
+---
