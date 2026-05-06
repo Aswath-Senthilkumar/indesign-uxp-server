@@ -145,3 +145,95 @@ the dashboard's Stage 5.2 will rely on.
 ### Stage 5.0 status: pass
 
 ---
+
+## Stage 5.1 — Build flow routing
+
+### Routes
+
+| Path | Role |
+|---|---|
+| `/` | 307 redirect to `/build/template` |
+| `/build/template` | Stage 5.2 — pick a template (Stage 5.1 placeholder) |
+| `/build/comps` | Stage 5.3 — filter and pick comps (placeholder) |
+| `/build/edit` | Stage 5.4 — split-screen edit + render (placeholder) |
+| `/legacy` | Stage 4 flat picker, kept reachable for reference |
+
+### Layout + state
+
+`dashboard/app/build/layout.tsx` wraps the three stages, mounting the
+`BuildStateProvider` once so client state survives navigation between
+the stages without a route remount. The provider lives in
+`dashboard/lib/build-state.tsx` and exposes:
+
+```ts
+{
+  template: { id, label, tileCount } | null,
+  comps: Comp[],
+  pageOverrides: Record<string, string>,
+  setTemplate, setComps, setPageOverride, reset,
+}
+```
+
+`setTemplate` clears `comps` + `pageOverrides` when the template id
+changes (different templates have different tile counts and page
+fields). Selecting the same template again is a no-op so users can
+revisit the picker without losing their work.
+
+Refresh-resets-state limitation accepted for v1, per prompt.
+
+### Stepper
+
+`dashboard/components/build-stepper.tsx` (`'use client'`) shows three
+steps with derived completion gates:
+
+- **Template:** complete when `template !== null`
+- **Comps:** complete when `comps.length === template.tileCount`
+- **Edit:** terminal step
+
+The current step is read from `usePathname()`. Reachability rule:
+the current step is always reachable; prior steps are reachable
+backward (so users can revise); future steps are reachable only when
+every prior step is complete. Unreachable steps render as
+non-clickable spans with `aria-disabled`.
+
+### Verification
+
+`curl` round trip on every route:
+
+```
+GET /                  -> 307, location: /build/template
+GET /build/template    -> 200 SIZE=16113   (placeholder + stepper)
+GET /build/comps       -> 200 SIZE=16082
+GET /build/edit        -> 200 SIZE=16113
+GET /legacy            -> 200 SIZE=30809   (old Stage 4 picker)
+```
+
+Stepper text present in `/build/template`: "Build progress",
+"Choose a template", "Template", "Comps". No compile errors in the
+Next dev log.
+
+Human walked the flow:
+
+- `/` redirects ✓
+- Stepper visible with step 1 active, 2/3 dimmed ✓
+- Disabled forward stepper items don't navigate ✓
+- `/legacy` reachable ✓
+
+Reply: "All checks verified, let's proceed."
+
+### Files
+
+| Path | Status | Role |
+|---|---|---|
+| `dashboard/app/page.tsx` | replaced | now just a `redirect("/build/template")` |
+| `dashboard/app/legacy/page.tsx` | new | the old Stage 4 picker moved here |
+| `dashboard/app/build/layout.tsx` | new | provider + stepper wrapper |
+| `dashboard/app/build/template/page.tsx` | new | placeholder, real UI in 5.2 |
+| `dashboard/app/build/comps/page.tsx` | new | placeholder, real UI in 5.3 |
+| `dashboard/app/build/edit/page.tsx` | new | placeholder, real UI in 5.4 |
+| `dashboard/lib/build-state.tsx` | new | client state context |
+| `dashboard/components/build-stepper.tsx` | new | stepper UI |
+
+### Stage 5.1 status: pass
+
+---
