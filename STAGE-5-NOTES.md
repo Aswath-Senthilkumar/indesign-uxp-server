@@ -892,3 +892,54 @@ handles either form. Not a defect, just a quirk worth knowing.
 ### Stage 5.6 status: pass
 
 ---
+
+## Additional notes (post-5.7) — user-driven tweaks
+
+Recording changes the user requested after the stage-5-complete tag
+was applied. Each is an iterative refinement of the existing flow,
+not new sub-stage work.
+
+### Manifest-driven tile grid (post-5.7 UI tweak)
+
+**Request:** the drag-grid on `/build/edit` was rendering the 6
+tiles as 3 cols × 2 rows on desktop. The actual InDesign template
+is laid out 2 cols × 3 rows. Match the dashboard to the .indd.
+
+**Approach:** template-driven, not hard-coded for one template.
+Templates declare their own desktop column count in the manifest;
+the dashboard mirrors it; the existing count-based heuristic stays
+as a fallback for templates that don't specify.
+
+**Changes:**
+
+1. `dashboard/templates/Recently_Leased_IOS/manifest.json` — new
+   optional `grid: { cols: 2 }` field.
+2. `dashboard/lib/manifest.ts` — added `GridHint` type, made
+   `TemplateManifestEntry.grid` optional.
+3. `dashboard/app/api/templates/[id]/introspect/route.ts` — response
+   now echoes `gridCols` from the manifest alongside `tileCount`,
+   keeping the picker → edit handoff to a single round-trip.
+4. `dashboard/lib/build-state.tsx` — `SelectedTemplate.gridCols?`
+   carries the value across stages.
+5. `dashboard/components/template-picker.tsx` — pulls `gridCols`
+   from the introspect response and stores it.
+6. `dashboard/components/edit-render.tsx` — replaces the
+   hard-mapped `gridColsFor(count)` with `gridColsClass(cols)` keyed
+   on `template.gridCols ?? heuristicCols(count)`. The heuristic
+   (≤4 → 2, ≤9 → 3, 10+ → 4) is unchanged and only fires when the
+   manifest doesn't specify.
+
+Tailwind class strings stay as static literals (purge-safe) — the
+mapping function uses a switch over a finite set of column counts
+(1-6) rather than building strings dynamically.
+
+### Verification
+
+- `POST /api/templates/recently-leased-ios/introspect` returns
+  `{ tileCount: 6, gridCols: 2, templatePath: "…" }`.
+- The /build/edit page compiles clean, no errors in the dev log.
+
+Pending visual confirmation by the user (next reload of /build/edit
+after walking through Template → Comps).
+
+---

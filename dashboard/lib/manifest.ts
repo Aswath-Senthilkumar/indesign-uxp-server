@@ -42,12 +42,24 @@ export interface PageField {
     editable: boolean;
 }
 
+/**
+ * Per-template grid hint. Drives the desktop column count of the
+ * tile-arrangement grid in /build/edit so the dashboard can mirror the
+ * actual InDesign layout (e.g. a 2-column × 3-row sheet renders as a
+ * 2-column drag grid). Optional — when absent, the edit page falls
+ * back to a generic count-based heuristic.
+ */
+export interface GridHint {
+    cols: number;
+}
+
 export interface TemplateManifestEntry {
     id: string;
     label: string;
     file: string;
     tile_fields: TileField[];
     page_fields: PageField[];
+    grid?: GridHint;
     static_frames_note?: string;
 }
 

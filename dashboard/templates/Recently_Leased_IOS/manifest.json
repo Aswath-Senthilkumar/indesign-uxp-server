@@ -3,6 +3,9 @@
     "id": "recently-leased-ios",
     "label": "Recently Leased IOS",
     "file": "templates/Recently_Leased_IOS.indd",
+    "grid": {
+        "cols": 2
+    },
     "tile_fields": [
         {
             "field": "address",

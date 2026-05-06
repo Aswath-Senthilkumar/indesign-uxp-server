@@ -59,12 +59,38 @@ function imageSrc(filename: string) {
     return `/api/images/${encodeURIComponent(filename)}`;
 }
 
-// Default column count heuristic: ≤4 → 2, 5–9 → 3, 10+ → 4. Keeps cards
-// readable across template tile-counts. Tunable later.
-function gridColsFor(count: number): string {
-    if (count <= 4) return "grid-cols-1 sm:grid-cols-2";
-    if (count <= 9) return "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3";
-    return "grid-cols-1 sm:grid-cols-2 lg:grid-cols-4";
+// Tile-grid column class. When the template's manifest declares
+// `grid.cols`, we use that as the desktop count so the dashboard mirrors
+// the actual InDesign layout (e.g. the Recently Leased IOS sheet is
+// 2 cols × 3 rows in the .indd, so the drag grid should match). Without
+// the manifest hint, fall back to a count-based heuristic.
+//
+// Tailwind's purge needs the column class names to appear as static
+// strings — we map the numeric cols to a finite set rather than building
+// strings dynamically.
+function gridColsClass(cols: number): string {
+    switch (cols) {
+        case 1:
+            return "grid-cols-1";
+        case 2:
+            return "grid-cols-1 sm:grid-cols-2";
+        case 3:
+            return "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3";
+        case 4:
+            return "grid-cols-1 sm:grid-cols-2 lg:grid-cols-4";
+        case 5:
+            return "grid-cols-1 sm:grid-cols-2 lg:grid-cols-5";
+        case 6:
+            return "grid-cols-1 sm:grid-cols-2 lg:grid-cols-6";
+        default:
+            return "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3";
+    }
+}
+
+function heuristicCols(count: number): number {
+    if (count <= 4) return 2;
+    if (count <= 9) return 3;
+    return 4;
 }
 
 interface SortableTileCardProps {
@@ -484,7 +510,7 @@ export default function EditRender() {
                             items={comps.map((c) => c.id)}
                             strategy={rectSortingStrategy}
                         >
-                            <ul className={`grid gap-3 ${gridColsFor(tileCount)}`}>
+                            <ul className={`grid gap-3 ${gridColsClass(template.gridCols ?? heuristicCols(tileCount))}`}>
                                 {comps.map((c, i) => (
                                     <li key={c.id}>
                                         <SortableTileCard

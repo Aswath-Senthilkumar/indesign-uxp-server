@@ -33,6 +33,9 @@ export async function POST(
         return NextResponse.json({
             tileCount: result.tileCount,
             templatePath: result.templatePath,
+            // Echo the manifest's grid hint so the client can drive its
+            // edit-stage layout without a second round-trip.
+            gridCols: tpl.grid?.cols,
         });
     } catch (e) {
         const msg = (e as Error).message;

@@ -23,6 +23,12 @@ export interface SelectedTemplate {
     id: string;
     label: string;
     tileCount: number;
+    /**
+     * Desktop column count for the edit-stage tile grid. Comes from the
+     * manifest's `grid.cols`. Undefined when the manifest didn't specify
+     * one — the edit page falls back to a count-based heuristic.
+     */
+    gridCols?: number;
 }
 
 export interface BuildState {
