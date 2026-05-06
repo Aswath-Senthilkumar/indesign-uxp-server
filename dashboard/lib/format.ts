@@ -23,8 +23,15 @@ export function formatSfAc(building_sf: number, land_area: number): string {
 }
 
 export interface RenderRequest {
-    template: string;
+    template_id: string;
     comps: Comp[];
+    page_overrides?: Record<string, string>;
+    /**
+     * tile_count is required so the server can validate the comps array
+     * without re-querying the bridge. The client carries it from the
+     * introspection cache.
+     */
+    tile_count: number;
 }
 
 export interface ValidationError {
@@ -32,8 +39,6 @@ export interface ValidationError {
     message: string;
 }
 
-const REQUIRED_TEMPLATE = "template-v2-test";
-const REQUIRED_COMPS = 6;
 const COMP_FIELDS: Array<{ key: keyof Comp; type: "string" | "number" }> = [
     { key: "id", type: "string" },
     { key: "address", type: "string" },
@@ -55,13 +60,12 @@ export function validateRenderRequest(
 
     const b = body as Record<string, unknown>;
 
-    if (typeof b.template !== "string") {
-        errors.push({ field: "template", message: "expected string" });
-    } else if (b.template !== REQUIRED_TEMPLATE) {
-        errors.push({
-            field: "template",
-            message: `only "${REQUIRED_TEMPLATE}" is supported in v1`,
-        });
+    if (typeof b.template_id !== "string" || b.template_id.length === 0) {
+        errors.push({ field: "template_id", message: "expected non-empty string" });
+    }
+
+    if (typeof b.tile_count !== "number" || !Number.isInteger(b.tile_count) || b.tile_count <= 0) {
+        errors.push({ field: "tile_count", message: "expected positive integer" });
     }
 
     if (!Array.isArray(b.comps)) {
@@ -69,10 +73,11 @@ export function validateRenderRequest(
         return { ok: false, errors };
     }
 
-    if (b.comps.length !== REQUIRED_COMPS) {
+    const requiredComps = typeof b.tile_count === "number" ? b.tile_count : null;
+    if (requiredComps !== null && b.comps.length !== requiredComps) {
         errors.push({
             field: "comps",
-            message: `expected ${REQUIRED_COMPS} comps, got ${b.comps.length}`,
+            message: `expected ${requiredComps} comps (per tile_count), got ${b.comps.length}`,
         });
     }
 
@@ -94,6 +99,24 @@ export function validateRenderRequest(
             }
         }
     });
+
+    // page_overrides is optional. When present, must be a plain string-keyed,
+    // string-valued map (the client may also send omitted/empty values which
+    // we accept as no-override).
+    if (b.page_overrides !== undefined && b.page_overrides !== null) {
+        if (typeof b.page_overrides !== "object" || Array.isArray(b.page_overrides)) {
+            errors.push({ field: "page_overrides", message: "expected object" });
+        } else {
+            for (const [k, v] of Object.entries(b.page_overrides as Record<string, unknown>)) {
+                if (typeof v !== "string") {
+                    errors.push({
+                        field: `page_overrides.${k}`,
+                        message: `expected string, got ${typeof v}`,
+                    });
+                }
+            }
+        }
+    }
 
     if (errors.length > 0) return { ok: false, errors };
 

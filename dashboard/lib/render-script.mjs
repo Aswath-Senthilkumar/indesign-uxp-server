@@ -41,12 +41,23 @@ const lit = (s) => JSON.stringify(s);
  */
 
 /**
- * @param {string} templatePath  absolute path to the read-only source template
- * @param {string} outputPdf     absolute path the plugin should export the PDF to
- * @param {BridgeTile[]} tiles   pre-formatted per-tile data
+ * @typedef {{ frame: string, value: string }} PageOverride
+ */
+
+/**
+ * @param {string} templatePath          absolute path to the read-only source template
+ * @param {string} outputPdf             absolute path the plugin should export the PDF to
+ * @param {BridgeTile[]} tiles           pre-formatted per-tile data
+ * @param {PageOverride[]} [pageOverrides=[]]
+ *   Page-level frame overrides. For each entry, the bridge code looks up
+ *   the named frame on the working copy and sets its `.contents` to
+ *   `value`. Frames that don't exist on the document are skipped silently
+ *   and reported in `result.skippedOverrides` so the caller can surface
+ *   that information if useful. Empty `value` is allowed and is applied
+ *   as-is (becomes an empty frame).
  * @returns {string}  JS source the bridge will evaluate inside the plugin
  */
-export function buildBridgeCode(templatePath, outputPdf, tiles) {
+export function buildBridgeCode(templatePath, outputPdf, tiles, pageOverrides = []) {
     return `
         const { FitOptions, ExportFormat, SaveOptions, UserInteractionLevels, OpenOptions } = require('indesign');
 
@@ -56,8 +67,11 @@ export function buildBridgeCode(templatePath, outputPdf, tiles) {
         app.scriptPreferences.userInteractionLevel = UserInteractionLevels.neverInteract;
 
         const tiles = ${JSON.stringify(tiles)};
+        const pageOverrides = ${JSON.stringify(pageOverrides)};
         const t0 = Date.now();
         const tileTimes = [];
+        const appliedOverrides = [];
+        const skippedOverrides = [];
 
         let doc;
         let result;
@@ -100,12 +114,34 @@ export function buildBridgeCode(templatePath, outputPdf, tiles) {
                 tileTimes.push({ n: t.n, ms: Date.now() - tStart });
             }
 
+            // Apply page-level overrides AFTER tile populate. Each override is
+            // a (frame, value) pair. Skipped frames don't fail the render —
+            // we want a missing page_title (e.g.) to be a soft signal, not a
+            // hard error.
+            for (const ov of pageOverrides) {
+                const f = doc.textFrames.itemByName(ov.frame);
+                if (f.isValid) {
+                    f.contents = ov.value;
+                    appliedOverrides.push(ov.frame);
+                } else {
+                    skippedOverrides.push(ov.frame);
+                }
+            }
+
             const populateMs = Date.now() - t0;
             const exportStart = Date.now();
             await doc.exportFile(ExportFormat.pdfType, ${lit(outputPdf)}, false);
             const exportMs = Date.now() - exportStart;
 
-            result = { ok: true, populateMs, exportMs, totalMs: Date.now() - t0, tileTimes };
+            result = {
+                ok: true,
+                populateMs,
+                exportMs,
+                totalMs: Date.now() - t0,
+                tileTimes,
+                appliedOverrides,
+                skippedOverrides
+            };
         } catch (e) {
             result = { ok: false, error: e.message || String(e) };
         }

@@ -352,3 +352,163 @@ Reply: "Everything works seamlessly, let's move on ahead."
 ### Stage 5.3 status: pass
 
 ---
+
+## Stage 5.4 — Split-screen edit & render
+
+The big one. Page-level field editing + drag-reorder of tiles + inline
+PDF preview, all on `/build/edit`.
+
+### What was built / changed
+
+| Path | Status | Role |
+|---|---|---|
+| `dashboard/components/edit-render.tsx` | NEW | The split-screen edit UI: page-field inputs + sortable tile grid + render button on the left, grey/preview/error pane on the right |
+| `dashboard/app/build/edit/page.tsx` | UPDATED | Server-side stub that just renders `<EditRender />` |
+| `dashboard/app/api/templates/[id]/page-fields/route.ts` | NEW | GET handler that opens template via openCopy, reads each editable `page_field`'s current `.contents`, returns `{ fields: [{ field, frame, label, current_value, missing }] }` so the client gets metadata + values in one round-trip |
+| `dashboard/app/api/render/route.ts` | UPDATED | Accepts `{ template_id, tile_count, comps, page_overrides? }`. Looks up the template's file path via `getTemplate()` from manifest. Translates `page_overrides` (keyed by manifest `field`) to bridge-side `(frame, value)` pairs and forwards. Empty-string overrides are dropped server-side so the template default stays. |
+| `dashboard/lib/render-script.mjs` | UPDATED | `buildBridgeCode` now accepts a `pageOverrides` array. After tile populate, iterates each override, sets the named frame's `.contents`. Missing frames go into `result.skippedOverrides` (soft signal, not a hard error). Applied frames go into `result.appliedOverrides`. |
+| `dashboard/lib/format.ts` | UPDATED | New `RenderRequest` shape: `template_id` + `tile_count` + `comps` + optional `page_overrides`. Validator drops the old hardcoded `template === "template-v2-test"` check; tile count is now a request-side fact carried from the client's introspection cache. |
+| `dashboard/components/picker.tsx` | UPDATED | Legacy picker payload migrated to the new shape so `/legacy` keeps working. |
+| `dashboard/package.json` | UPDATED | Added `@dnd-kit/core` 6.3.1, `@dnd-kit/sortable` 10.0.0, `@dnd-kit/utilities` 3.2.2. |
+
+### Drag + drop
+
+`DndContext` + `SortableContext` (rectSortingStrategy for grid). Pointer
+sensor with a 4 px activation distance so accidental clicks don't
+trigger drags; keyboard sensor for accessibility (`sortableKeyboardCoordinates`).
+Drop calls `arrayMove(comps, oldIndex, newIndex)` and writes back to
+`BuildState.setComps`. Tile-position labels are derived from the
+current array index, so they re-number live as cards reorder.
+
+The card body is the drag handle. The remove × button is outside the
+listeners block so its click doesn't initiate a drag.
+
+### Grid heuristic
+
+```
+≤ 4 tiles -> 2 cols (sm:2)
+5–9 tiles -> 3 cols (sm:2 lg:3)
+10+ tiles -> 4 cols (sm:2 lg:4)
+```
+
+For our current 6-tile template that lands at 3 cols on `lg`, 2 on
+`sm`. Tunable later.
+
+### Page-field pre-population
+
+On mount (and whenever the selected template changes — guarded by a
+ref so we don't re-fetch on render-state changes), the client fetches
+`/api/templates/{id}/page-fields` and stores the response in local
+state. The pre-populated values become the input defaults; user edits
+go into `BuildState.pageOverrides[field]`. The `valueFor(field)`
+helper resolves "override -> current_value -> empty string".
+
+The server endpoint returns `current_value: ""` and `missing: true`
+when a frame doesn't exist in the .indd, and the input renders an
+amber warning chip next to its label.
+
+### Render button gating
+
+Disabled unless ALL of:
+- Template is selected
+- Comp count exactly equals `template.tileCount`
+- Page-fields have finished loading
+- Every editable page-field has a non-empty effective value
+
+The helper text adapts to which condition is unmet so the user knows
+why it's disabled.
+
+### Right pane
+
+Three states:
+- **Idle / loading:** grey panel (`bg-zinc-200 dark:bg-zinc-800`) with
+  centered hint text. Stage 4 prompt called for "Hit Render to
+  preview your team sheet"; we honor that wording.
+- **Success:** `<embed type="application/pdf">` 680 px tall + Download
+  PDF anchor. Header strip shows size + server wall ms.
+- **Error:** destructive-styled `Card` with the API error + detail.
+
+Blob URL cleanup via `useEffect` returns its previous URL to
+`URL.revokeObjectURL` when state changes, so re-renders don't leak.
+
+### Render API — new shape
+
+Request:
+
+```json
+{
+  "template_id": "recently-leased-ios",
+  "tile_count": 6,
+  "comps": [...],
+  "page_overrides": { "title": "...", "tagline": "..." }
+}
+```
+
+The route:
+1. Validates body shape via `validateRenderRequest` (now generic over
+   any tile_count; old hardcoded check removed).
+2. Looks up `template_id` against the manifest. 404 if unknown.
+3. Maps `page_overrides[field]` → `{ frame, value }` using the
+   manifest's `page_fields[].frame`. Drops any fields not declared
+   editable in the manifest. Drops empty strings (template default
+   wins).
+4. Calls `buildBridgeCode(templatePath, outputPdf, tiles, bridgeOverrides)`.
+5. Surfaces `appliedOverrides` and `skippedOverrides` as
+   `X-Render-Applied-Overrides` and `X-Render-Skipped-Overrides`
+   headers.
+
+### Verification
+
+API direct:
+
+```
+POST /api/render with overrides:
+  HTTP=200 TIME=3.53s SIZE=273129
+  X-Render-Applied-Overrides: page_title,page_tagline
+  X-Render-Populate-Ms: 1492
+  X-Render-Export-Ms:  699
+  app.documents.length: 0 -> 0
+```
+
+`/api/templates/recently-leased-ios/page-fields`:
+
+```json
+{
+  "fields": [
+    {
+      "field": "title",
+      "frame": "page_title",
+      "label": "Title",
+      "current_value": "SHEEHAN SCHUMACHER | recently leased IOS | Q1 2026",
+      "missing": false
+    },
+    {
+      "field": "tagline",
+      "frame": "page_tagline",
+      "label": "Tagline",
+      "current_value": "Over $615 Million in Total Deal Volume Since 2022 vv\r",
+      "missing": false
+    }
+  ]
+}
+```
+
+Human walked the entire flow:
+
+- Edit & render header + Change comps link visible
+- Page-level fields pre-populated with the actual template content
+- 6 tile cards render in the grid with images + addresses
+- Drag-and-drop reorder works; tile labels re-number live
+- Remove × disables Render with a helpful amber message + link back
+- Re-add at /build/comps then return; tile order preserved
+- Edit Title to "TEST RENDER", Render button enabled
+- Click Render → "Rendering…" → preview appears with the new title
+- Re-edit + re-render → preview updates (old blob URL revoked)
+- Download PDF saves the file
+- Empty Title disables Render with "Fill in every page field"
+
+Reply: "works perfectly as expected. what more is left?"
+
+### Stage 5.4 status: pass
+
+---

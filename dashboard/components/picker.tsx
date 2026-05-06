@@ -80,8 +80,12 @@ export default function Picker({ comps }: PickerProps) {
         if (!canRender || isLoading) return;
         setRenderState({ kind: "loading" });
 
+        // Legacy picker: hardcoded template_id + tile_count for the
+        // sample template. The real flow at /build/* gets these from
+        // the manifest + introspection.
         const payload = {
-            template: "template-v2-test",
+            template_id: "recently-leased-ios",
+            tile_count: 6,
             comps: selectedComps,
         };
 

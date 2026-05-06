@@ -4,32 +4,21 @@
  * Forwards a render request to the InDesign bridge:
  *   client -> Next.js API route -> bridge (127.0.0.1:3000) -> plugin -> InDesign DOM
  *
- * Per-render isolation strategy: in-memory `OpenOptions.openCopy`.
+ * Stage 5.4 changes:
+ *   - Body now uses { template_id, comps, page_overrides?, tile_count }.
+ *     template_id is looked up against templates/manifest.json to resolve
+ *     the .indd file path; tile_count is carried by the client from the
+ *     introspection cache so we don't re-query the bridge here.
+ *   - page_overrides is an optional map of frame name -> override text;
+ *     applied after the per-tile populate, before export. See
+ *     dashboard/lib/render-script.mjs for the bridge-side handling.
  *
- *   The bridge code (see dashboard/lib/render-script.mjs) calls
- *     await app.open(TEMPLATE_PATH, true, OpenOptions.openCopy)
- *   which loads the file content into a fresh untitled document
- *   without binding it to the original disk path. The original
- *   template file is never opened, never locked, never mutated.
- *   On close, the untitled doc is discarded and InDesign's
- *   Document.close() actually decrements app.documents.length
- *   (unlike close on a doc opened from a real path, which is a
- *   no-op in this UXP / InDesign 2026 build — see render-script.mjs
- *   header for full notes).
+ * Per-render isolation: in-memory `OpenOptions.openCopy` (Stage 4.x).
+ * The original template file is never bound, locked, or modified.
  *
- *   Net result: original immutable, per-render isolation, no on-disk
- *   working copies, no orphan files, no file lock to release.
- *
- * Output: streams the rendered PDF back as application/pdf so the
- * browser can preview it inline. The intermediate PDF file on disk
- * is also cleaned up after the bytes are read.
- *
- * Path safety: the bridge's POST /execute forwards code strings to the
- * plugin verbatim and does not run the Stage 1.5 path validator
- * (which lives in src/handlers/, the MCP-server codebase we are not
- * going through). We resolve to absolute and pre-check existence
- * locally; the only true boundary is InDesign's process-level file
- * permissions.
+ * Output: streams the rendered PDF back as application/pdf for inline
+ * preview in the browser. Per-request PDF on disk is cleaned up after
+ * the bytes are read.
  */
 
 import { NextResponse } from "next/server";
@@ -40,16 +29,14 @@ import {
     formatSfAc,
     validateRenderRequest,
 } from "@/lib/format";
+import { getTemplate } from "@/lib/manifest";
 // @ts-expect-error — plain ESM .mjs, no .d.ts; import shape is stable
 import { buildBridgeCode } from "@/lib/render-script.mjs";
 
 const BRIDGE_URL = "http://127.0.0.1:3000";
 
-// The dashboard runs from `dashboard/`. Templates, mock-data, and the output
-// dir are at the repo root, one level up. Allow override via env var.
 const REPO_ROOT =
     process.env.INDESIGN_REPO_ROOT ?? path.resolve(process.cwd(), "..");
-const TEMPLATE_PATH = path.join(REPO_ROOT, "templates", "template-v2-test.indd");
 const IMAGES_DIR = path.join(REPO_ROOT, "mock-data", "images");
 const OUTPUT_DIR = path.join(REPO_ROOT, "output");
 
@@ -62,6 +49,8 @@ interface BridgeResult {
     exportMs?: number;
     totalMs?: number;
     tileTimes?: Array<{ n: number; ms: number }>;
+    appliedOverrides?: string[];
+    skippedOverrides?: string[];
     closeWarning?: string;
 }
 
@@ -108,7 +97,7 @@ async function bestEffortUnlink(p: string): Promise<void> {
     try {
         await fs.unlink(p);
     } catch {
-        /* swallow — output/ is gitignored and these are tiny */
+        /* output/ is gitignored and these are tiny */
     }
 }
 
@@ -129,23 +118,31 @@ export async function POST(request: Request) {
             { status: 400 }
         );
     }
-    const { comps } = validation.request;
+    const { template_id, comps, page_overrides } = validation.request;
+
+    // Manifest lookup -> file path
+    const tpl = await getTemplate(template_id);
+    if (!tpl) {
+        return NextResponse.json(
+            { error: `unknown template_id: ${template_id}` },
+            { status: 404 }
+        );
+    }
+    const templatePath = path.resolve(REPO_ROOT, tpl.file);
+    try {
+        await fs.access(templatePath);
+    } catch {
+        return NextResponse.json(
+            { error: "template file not found", expected: templatePath },
+            { status: 500 }
+        );
+    }
 
     const imageCheck = await checkImagesExist(comps);
     if (!imageCheck.ok) {
         return NextResponse.json(
             { error: "image files missing or too small", missing: imageCheck.missing },
             { status: 400 }
-        );
-    }
-
-    // Verify template exists before doing anything.
-    try {
-        await fs.access(TEMPLATE_PATH);
-    } catch {
-        return NextResponse.json(
-            { error: "template not found", expected: TEMPLATE_PATH },
-            { status: 500 }
         );
     }
 
@@ -183,11 +180,28 @@ export async function POST(request: Request) {
         image: path.join(IMAGES_DIR, c.image_filename),
     }));
 
+    // Translate page_overrides keyed by manifest field name to the bridge's
+    // (frame, value) shape. Only fields that exist in the manifest's
+    // page_fields and are marked editable are forwarded — anything else the
+    // client might send is ignored. Empty strings are skipped (treat empty
+    // input as "leave the template default alone").
+    const editableByField = new Map<string, string>();
+    for (const pf of tpl.page_fields) {
+        if (pf.editable) editableByField.set(pf.field, pf.frame);
+    }
+    const bridgeOverrides: Array<{ frame: string; value: string }> = [];
+    for (const [field, value] of Object.entries(page_overrides ?? {})) {
+        const frame = editableByField.get(field);
+        if (frame && value.length > 0) {
+            bridgeOverrides.push({ frame, value });
+        }
+    }
+
     let result: BridgeResult | null = null;
     let bridgeError: (Error & { httpStatus?: number }) | null = null;
 
     try {
-        const code = buildBridgeCode(TEMPLATE_PATH, outputPdf, tiles) as string;
+        const code = buildBridgeCode(templatePath, outputPdf, tiles, bridgeOverrides) as string;
         result = (await bridgeExecute(code)) as BridgeResult;
     } catch (e) {
         bridgeError = e as Error & { httpStatus?: number };
@@ -230,7 +244,6 @@ export async function POST(request: Request) {
         );
     }
 
-    // Best-effort cleanup of the per-request PDF (we have it in memory now).
     bestEffortUnlink(outputPdf).catch(() => {});
 
     const wallMs = Date.now() - tCallStart;
@@ -244,6 +257,12 @@ export async function POST(request: Request) {
             "X-Render-Populate-Ms": String(result.populateMs ?? ""),
             "X-Render-Export-Ms": String(result.exportMs ?? ""),
             "X-Render-Wall-Ms": String(wallMs),
+            ...(result.appliedOverrides && result.appliedOverrides.length > 0
+                ? { "X-Render-Applied-Overrides": result.appliedOverrides.join(",") }
+                : {}),
+            ...(result.skippedOverrides && result.skippedOverrides.length > 0
+                ? { "X-Render-Skipped-Overrides": result.skippedOverrides.join(",") }
+                : {}),
             ...(result.closeWarning
                 ? { "X-Render-Close-Warning": result.closeWarning.slice(0, 200) }
                 : {}),
