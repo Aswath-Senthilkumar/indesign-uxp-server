@@ -289,3 +289,66 @@ Reply: "Everything works as expected, let's continue."
 ### Stage 5.2 status: pass
 
 ---
+
+## Stage 5.3 — Comps selection
+
+### What was built
+
+| Path | Role |
+|---|---|
+| `dashboard/components/comps-picker.tsx` | NEW. Pure selection UI: search filter, Add/Remove, Selected list, Continue to Edit. Reads `template.tileCount` from BuildState — gating becomes "exactly N selected" where N is the resolved count. |
+| `dashboard/app/build/comps/page.tsx` | UPDATED. Server component reads `mock-data/comps.json` and passes to the picker. |
+
+### Header context strip
+
+```
+Pick comps                              Change template
+Template: Recently Leased IOS · 6 tiles
+```
+
+The "Change template" link goes back to `/build/template`. State
+survives — the user's prior template selection stays highlighted, and
+their comp picks survive the round trip back here too (BuildState
+provider lives in the shared layout).
+
+### Recovery state
+
+If the user lands on `/build/comps` with no `template` in BuildState
+(e.g., they refreshed the page or pasted a deep link), the picker
+renders a recovery Card: *"No template selected. The build flow
+starts at template selection."* + a styled `Link` back to
+`/build/template`. State context is preserved unconditionally; we
+don't auto-redirect because it's clearer for the user to see why
+they're being sent back.
+
+### Bug caught + fixed during build
+
+First version called `useMemo` after an early `if (!template) return`
+guard, breaking the rules-of-hooks ordering. Restructured so the
+hooks run unconditionally and the early return uses values without
+calling more hooks.
+
+Also tried `<Button asChild>` (a shadcn Slot pattern) and hit a React
+"unknown DOM prop" warning because the locally-installed Button
+component doesn't ship with `asChild` support. Replaced with a plain
+styled `<Link>`.
+
+### Verification
+
+`curl /build/comps` returns 200 with the recovery-card text when no
+template is set. Human walked the full flow:
+
+- Template select → Continue → introspection → land on /build/comps
+- Header shows "Recently Leased IOS · 6 tiles"
+- Filter narrows to expected results
+- Add 6 → 7th becomes "Full" → Continue enables
+- "Change template" preserves prior template highlight
+- State preserved across re-entry (prior comps still selected on return)
+- Refresh on /build/comps shows the recovery card
+- Continue to Edit lands on /build/edit (placeholder for now)
+
+Reply: "Everything works seamlessly, let's move on ahead."
+
+### Stage 5.3 status: pass
+
+---
