@@ -43,6 +43,8 @@ type RenderState =
           blobUrl: string;
           bytes: number;
           serverWallMs: number | null;
+          appliedOverrides: string[];
+          skippedOverrides: string[];
       }
     | { kind: "error"; message: string; detail?: string };
 
@@ -81,6 +83,8 @@ function SortableTileCard({ comp, index, onRemove }: SortableTileCardProps) {
         isDragging,
     } = useSortable({ id: comp.id });
 
+    const [imgFailed, setImgFailed] = useState(false);
+
     const style: React.CSSProperties = {
         transform: CSS.Transform.toString(transform),
         transition,
@@ -108,13 +112,20 @@ function SortableTileCard({ comp, index, onRemove }: SortableTileCardProps) {
                     ×
                 </button>
             </div>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-                src={imageSrc(comp.image_filename)}
-                alt=""
-                loading="lazy"
-                className="h-24 w-full rounded-md object-cover bg-muted"
-            />
+            {imgFailed ? (
+                <div className="flex h-24 w-full items-center justify-center rounded-md bg-muted text-xs text-muted-foreground">
+                    No image
+                </div>
+            ) : (
+                /* eslint-disable-next-line @next/next/no-img-element */
+                <img
+                    src={imageSrc(comp.image_filename)}
+                    alt=""
+                    loading="lazy"
+                    onError={() => setImgFailed(true)}
+                    className="h-24 w-full rounded-md object-cover bg-muted"
+                />
+            )}
             {/* Drag handle: the body of the card is grabbable. The remove
                 button has its own click handler which short-circuits. */}
             <div
@@ -143,7 +154,22 @@ export default function EditRender() {
     const [pageFieldsLoading, setPageFieldsLoading] = useState(false);
     const [pageFieldsError, setPageFieldsError] = useState<string | null>(null);
     const [renderState, setRenderState] = useState<RenderState>({ kind: "idle" });
+    // Tracks whether tile order or page fields changed since the last
+    // successful render. Drives the "re-render to see changes" hint.
+    const [dirtySinceRender, setDirtySinceRender] = useState(false);
     const fieldsFetchedFor = useRef<string | null>(null);
+
+    // Local wrappers around the BuildState setters: any user-driven mutation
+    // marks the rendered preview stale. Reset to clean on every successful
+    // render below.
+    function handleSetComps(next: Comp[]) {
+        setComps(next);
+        setDirtySinceRender(true);
+    }
+    function handleSetPageOverride(field: string, value: string) {
+        setPageOverride(field, value);
+        setDirtySinceRender(true);
+    }
 
     // Revoke blob URL on next render or unmount
     useEffect(() => {
@@ -197,11 +223,11 @@ export default function EditRender() {
         const oldIndex = comps.findIndex((c) => c.id === active.id);
         const newIndex = comps.findIndex((c) => c.id === over.id);
         if (oldIndex < 0 || newIndex < 0) return;
-        setComps(arrayMove(comps, oldIndex, newIndex));
+        handleSetComps(arrayMove(comps, oldIndex, newIndex));
     }
 
     function onRemoveTile(id: string) {
-        setComps(comps.filter((c) => c.id !== id));
+        handleSetComps(comps.filter((c) => c.id !== id));
     }
 
     // Resolve effective page-field values: BuildState override -> current
@@ -299,12 +325,23 @@ export default function EditRender() {
         const blobUrl = URL.createObjectURL(blob);
         const wallHeader = res.headers.get("X-Render-Wall-Ms");
         const serverWallMs = wallHeader ? Number.parseInt(wallHeader, 10) : null;
+        const applied = (res.headers.get("X-Render-Applied-Overrides") ?? "")
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean);
+        const skipped = (res.headers.get("X-Render-Skipped-Overrides") ?? "")
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean);
         setRenderState({
             kind: "success",
             blobUrl,
             bytes: blob.size,
             serverWallMs: Number.isFinite(serverWallMs) ? serverWallMs : null,
+            appliedOverrides: applied,
+            skippedOverrides: skipped,
         });
+        setDirtySinceRender(false);
     }
 
     // Recovery: no template / not enough comps
@@ -373,9 +410,14 @@ export default function EditRender() {
                         Page-level fields
                     </h2>
                     {pageFieldsLoading ? (
-                        <p className="text-sm text-muted-foreground">
-                            Loading current values from the template…
-                        </p>
+                        <div className="grid gap-3" aria-busy="true" aria-label="Loading current values from the template">
+                            {[0, 1].map((i) => (
+                                <div key={i} className="grid gap-1.5">
+                                    <div className="h-4 w-20 animate-pulse rounded bg-muted" />
+                                    <div className="h-9 w-full animate-pulse rounded-md bg-muted" />
+                                </div>
+                            ))}
+                        </div>
                     ) : pageFieldsError ? (
                         <Card
                             role="alert"
@@ -408,7 +450,7 @@ export default function EditRender() {
                                         id={`pf-${f.field}`}
                                         value={valueFor(f.field)}
                                         onChange={(e) =>
-                                            setPageOverride(f.field, e.target.value)
+                                            handleSetPageOverride(f.field, e.target.value)
                                         }
                                         placeholder={f.frame}
                                     />
@@ -475,20 +517,32 @@ export default function EditRender() {
                         onClick={onRender}
                         aria-busy={renderState.kind === "loading"}
                     >
-                        {renderState.kind === "loading" ? "Rendering…" : "Render"}
+                        {renderState.kind === "loading"
+                            ? "Rendering…"
+                            : renderState.kind === "success"
+                                ? "Re-render"
+                                : "Render"}
                     </Button>
-                    <p className="mt-2 text-xs text-muted-foreground">
+                    <p
+                        className={`mt-2 text-xs ${
+                            renderState.kind === "success" && dirtySinceRender
+                                ? "font-medium text-amber-700 dark:text-amber-400"
+                                : "text-muted-foreground"
+                        }`}
+                    >
                         {renderState.kind === "loading"
                             ? "Calling the bridge — usually 2-10 seconds."
-                            : canRender
-                                ? renderState.kind === "success"
-                                    ? "Re-render to see changes."
-                                    : "Ready to render."
-                                : comps.length !== tileCount
+                            : !canRender
+                                ? comps.length !== tileCount
                                     ? `Need exactly ${tileCount} tiles.`
                                     : !allRequiredOverridesNonEmpty
                                         ? "Fill in every page field."
-                                        : "Loading…"}
+                                        : "Loading…"
+                                : renderState.kind === "success"
+                                    ? dirtySinceRender
+                                        ? "You've made changes — re-render to see them."
+                                        : "Preview is up to date."
+                                    : "Ready to render."}
                     </p>
                 </div>
             </div>
@@ -525,6 +579,19 @@ export default function EditRender() {
                                 Download PDF
                             </a>
                         </div>
+                        {renderState.skippedOverrides.length > 0 ? (
+                            <p className="text-xs text-amber-700 dark:text-amber-400">
+                                Note: page-field frame{renderState.skippedOverrides.length === 1 ? "" : "s"}{" "}
+                                <code className="rounded bg-amber-500/10 px-1 py-0.5">
+                                    {renderState.skippedOverrides.join(", ")}
+                                </code>{" "}
+                                not found in the template — those override
+                                {renderState.skippedOverrides.length === 1 ? " was" : "s were"} skipped.
+                                Add the named frame
+                                {renderState.skippedOverrides.length === 1 ? "" : "s"} in InDesign or remove the
+                                input{renderState.skippedOverrides.length === 1 ? "" : "s"} from the manifest.
+                            </p>
+                        ) : null}
                     </div>
                 ) : renderState.kind === "error" ? (
                     <Card

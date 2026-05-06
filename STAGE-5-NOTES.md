@@ -633,3 +633,74 @@ User confirmed `render-reverted.pdf` matches the expected output.
 ### Status: pass
 
 ---
+
+## Stage 5.5 — Polish
+
+Focused pass on UX gaps that came up during the build, not a redesign.
+
+### What changed in `dashboard/components/edit-render.tsx`
+
+**1. Page-fields skeleton.** Replaced the "Loading current values from the
+template…" plain-text placeholder with two pulsing label+input shapes
+(`animate-pulse` on `bg-muted`). The skeleton is `aria-busy=true` and
+labelled so a screen reader still announces "Loading current values
+from the template" while the visual changes are happening.
+
+**2. "Made changes" hint after rendering.** New local state
+`dirtySinceRender`. Local wrappers `handleSetComps` and
+`handleSetPageOverride` set it `true` whenever the user reorders or
+removes a tile, or types into a page-field input. The render-success
+path resets it to `false`.
+
+The Render button label and helper text now reflect three success
+sub-states:
+
+| Condition | Button | Helper line |
+|---|---|---|
+| `success` && not dirty | "Re-render" | "Preview is up to date." (muted) |
+| `success` && dirty | "Re-render" | "You've made changes — re-render to see them." (amber) |
+| not yet rendered, can render | "Render" | "Ready to render." |
+| loading | "Rendering…" | "Calling the bridge — usually 2-10 seconds." |
+
+The amber tone uses Tailwind's `text-amber-700 dark:text-amber-400`.
+
+**3. Image fallback on tile cards.** `<img>` now has an `onError`
+handler that flips `imgFailed` and renders a "No image" gray
+placeholder in the same dimensions as the image. Defensive — the
+mock data always has valid images, but a future Crexi-import comp
+with a broken `image_filename` won't render a broken-image icon.
+
+**4. Skipped-overrides surfacing.** The render success state now
+captures `appliedOverrides` and `skippedOverrides` from
+`X-Render-Applied-Overrides` / `X-Render-Skipped-Overrides`
+response headers. Skipped frames render as a small amber note under
+the Download button explaining which frame names weren't found and
+suggesting the fix (add the named frame in InDesign or remove the
+input from the manifest). Won't trigger for the current template.
+
+### Things deliberately NOT touched
+
+- **Stepper visuals** — already differentiated active / complete /
+  unreachable in 5.1; no changes warranted.
+- **Back-navigation safety** — BuildState provider survives
+  navigation between `/build/*` so back-clicks don't discard state.
+  No "are you sure?" prompt needed.
+- **Loading/error states everywhere else** — already in place from
+  earlier sub-stages.
+
+### Verification
+
+Human walked the polish flow:
+- Skeleton appears briefly on first edit-page load
+- After Render: button switches to "Re-render", helper says "Preview
+  is up to date."
+- After typing in Title input: helper switches to amber "You've made
+  changes — re-render to see them."
+- Drag a tile: same dirty-hint state
+- Re-render: helper resets to "Preview is up to date."
+
+Reply: "Everything works just as expected."
+
+### Stage 5.5 status: pass
+
+---
