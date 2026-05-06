@@ -237,3 +237,55 @@ Reply: "All checks verified, let's proceed."
 ### Stage 5.1 status: pass
 
 ---
+
+## Stage 5.2 — Template selection
+
+### What was built
+
+| Path | Role |
+|---|---|
+| `dashboard/lib/manifest.ts` | NEW. Reads `templates/manifest.json`, caches per-process. Exposes `loadManifest()`, `getTemplate(id)`. |
+| `dashboard/app/api/templates/[id]/introspect/route.ts` | NEW. POST, looks up the template by id, calls `getTemplateIntrospection`, returns `{ tileCount, templatePath }`. 404 unknown id, 502 bridge fail. |
+| `dashboard/app/api/templates/[id]/preview/route.ts` | NEW. GET, opens template via `openCopy`, exports PDF, returns inline (`Content-Disposition: inline; filename="…"` so the browser viewer handles save). |
+| `dashboard/components/template-picker.tsx` | NEW. Client picker. Renders one card per manifest entry with field chips, Select + Preview buttons. Continue calls introspect, populates BuildState, navigates to `/build/comps`. |
+| `dashboard/app/build/template/page.tsx` | UPDATED. Server component that loads the manifest and hands off to the picker. |
+
+### Behavior
+
+- Card per template with `label`, `file`, tile-field chips (gray) and
+  page-field chips (blue).
+- Preview button is a plain `<a target="_blank">` to the preview
+  endpoint — the browser's PDF viewer handles inline display + save.
+  No save initiated server-side, per user instruction.
+- Clicking Select highlights the card and enables Continue.
+- Continue: POST `/api/templates/{id}/introspect` → on 200 sets
+  `BuildState.template = { id, label, tileCount }` and routes to
+  `/build/comps`. On 4xx/5xx: surfaces error in a destructive Card.
+- Loading state on Continue (button → "Loading template…",
+  `aria-busy`).
+
+### Verification
+
+```
+GET  /build/template                                200, all expected text
+POST /api/templates/recently-leased-ios/introspect  200, tileCount=6, 3.2 s
+POST /api/templates/unknown/introspect              404, clean error
+GET  /api/templates/recently-leased-ios/preview     200, application/pdf,
+                                                    273,416 B, %PDF-1.4 magic
+```
+
+`app.documents.length` was 0 before and 0 after both API calls — no
+orphan accumulation.
+
+Human walked the picker:
+- Card renders with file path, tile + page-field chips
+- Preview opens in a new tab with the template PDF (browser viewer)
+- Select highlights, Continue enables
+- Continue shows "Loading template…", then navigates
+- Stepper shows Template ✓ / Comps active
+
+Reply: "Everything works as expected, let's continue."
+
+### Stage 5.2 status: pass
+
+---

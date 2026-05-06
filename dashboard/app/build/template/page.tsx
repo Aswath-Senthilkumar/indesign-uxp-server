@@ -1,15 +1,10 @@
-// Stage 5.1 placeholder — real template picker UI lands in Stage 5.2.
+import { loadManifest } from "@/lib/manifest";
+import TemplatePicker from "@/components/template-picker";
 
-export default function BuildTemplatePage() {
-    return (
-        <section>
-            <h1 className="text-2xl font-semibold tracking-tight">
-                Choose a template
-            </h1>
-            <p className="mt-2 text-sm text-muted-foreground">
-                Stage 5.1 placeholder. The template-picker UI is wired up in
-                Stage 5.2.
-            </p>
-        </section>
-    );
+// Server Component: reads the manifest at request time and hands the
+// list to the client picker, which holds selection state and triggers
+// introspection on Continue.
+export default async function BuildTemplatePage() {
+    const templates = await loadManifest();
+    return <TemplatePicker templates={templates} />;
 }
