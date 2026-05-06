@@ -8,6 +8,100 @@ Companion to `STAGE-2-NOTES.md`, `STAGE-3-NOTES.md`, `STAGE-4-NOTES.md`.
 
 ---
 
+## Stage 5 — One-page summary
+
+**Branch:** `analysis/initial-pass`
+**Reference tag (Stage 4):** `stage-4-complete` at `ecd3985`.
+**Commits added since stage-4-complete:** **10** (this wrap-up + 9
+prior). Includes one pre-Stage-5 working-copy isolation commit
+(`634f811`) that became the substrate for everything Stage 5 builds
+on.
+
+### Sub-stages
+
+| | Status | Commit |
+|---|---|---|
+| (pre-5) per-render working copy via `OpenOptions.openCopy` | ✅ | `634f811` |
+| 5.0 Template manifest + introspection | ✅ | `885b843` |
+| 5.1 Build flow routing (`/build/{template,comps,edit}`) | ✅ | `164a495` |
+| 5.2 Template selection + preview endpoint | ✅ | `f11c4d8` |
+| 5.3 Comps selection | ✅ | `45ab8f3` |
+| 5.4 Split-screen edit + render with page overrides + dnd-kit | ✅ | `29a48bc` |
+| (post-5.4) Per-template manifest folders + font-handling note | ✅ | `c8ba69c` |
+| 5.5 Polish | ✅ | `8cce8c3` |
+| 5.6 Dry-run iteration | ✅ | `9e06d77` |
+| 5.7 Wrap-up | this commit | (this) |
+
+### Templates supported
+
+One. `Recently_Leased_IOS` (id `recently-leased-ios`), file
+`templates/Recently_Leased_IOS.indd`.
+
+Resolved tile count via runtime introspection: **6** (sample frames:
+`tile_1_address`, `tile_2_address`, `tile_3_address`).
+
+Adding a new template now requires no code changes — drop the .indd
+into the repo-root `templates/` directory and create a sibling folder
+under `dashboard/templates/<TemplateName>/` with a `manifest.json`.
+The dashboard's manifest scanner picks it up on next module load.
+
+### Render-time observations across the dry-run set
+
+Bridge / plugin / dashboard all running on a warm InDesign session:
+
+| Run | Template + variation | Wall | Bytes | Overrides applied |
+|---|---|---|---|---|
+| 5.4 verification | first 6, both overrides | 3.5 s | 273,175 B | page_title,page_tagline |
+| 5.6 A | first 6, no overrides | 3.66 s | 273,416 B | (none) |
+| 5.6 B | last 6, title only | 4.12 s | 279,226 B | page_title |
+| 5.6 C | first 6 reversed, both | 3.64 s | 272,977 B | page_title,page_tagline |
+| 5.6 F | first 6, whitespace overrides | 3.73 s | 273,219 B | page_tagline (see note) |
+
+**Median wall ≈ 3.7 s, max ≈ 4.1 s.** Well within the Stage 4-era
+budget. Plugin total time for a 6-tile render with both overrides
+is ~2.5 s (1.7 s populate + 0.8 s export); the rest is HTTP +
+fs.readFile + response framing.
+
+### Open items for the user before scheduling Hannah
+
+1. **Bridge / dashboard / InDesign cold-start** before the demo.
+   Plugin is loaded via UXP DT (doesn't survive InDesign restarts),
+   so a clean walk-through is: launch InDesign → load plugin → start
+   bridge → start dashboard → visit `/`. No template needs to be
+   open; `OpenOptions.openCopy` opens the file fresh per call.
+2. **The whitespace-override edge case** (5.6 F) is documented but
+   not fixed. UI prevents it; direct API callers can produce 3 spaces
+   in a frame. Trivial fix when we want.
+3. **`test-render.js` (CLI) is broken** because it hardcodes the old
+   filename `templates/template-v2-test.indd` and the file was renamed
+   to `Recently_Leased_IOS.indd` mid-Stage-5. Stage 5 prompt said
+   don't touch the CLI; it's a one-line constant change to revive.
+   Dashboard is the primary interface from here.
+4. **Tag push.** `stage-5-complete` is created locally; will ask
+   before pushing to origin.
+5. **Demo flow for Hannah.** Recommend walking template → comps →
+   edit, drag a tile, edit a page field, hit Render, scroll/download
+   the preview. The split-screen layout makes the value clear quickly.
+
+### Hannah-review readiness
+
+| Capability | Status |
+|---|---|
+| Template selection with field-set chips and preview | ✓ |
+| Comp filter + selection (gated to template's tile count) | ✓ |
+| Drag-reorderable tile arrangement | ✓ |
+| Page-level field editing with template defaults pre-populated | ✓ |
+| Inline PDF preview after render | ✓ |
+| Download PDF | ✓ |
+| Re-render workflow with dirty-state hint | ✓ |
+| Original template never modified (verified by SHA256) | ✓ |
+| Error states surface bridge / plugin / validation issues | ✓ |
+| Multi-template architecture in place (folder-per-template) | ✓ |
+
+Ready for Hannah review.
+
+---
+
 ## Prerequisites — verified at start
 
 - `STAGE-4-NOTES.md` exists ✓
