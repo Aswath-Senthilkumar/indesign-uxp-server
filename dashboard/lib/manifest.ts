@@ -1,16 +1,30 @@
-/**
- * Reads `templates/manifest.json` (at the repo root) and exposes the
- * parsed entries to server components and API routes. Cached at module
- * load — manifest changes require a dev-server restart, which is fine
- * for v1.
+/*
+ * Template registry. The dashboard scans every "manifest.json" under
+ * `dashboard/templates/<TemplateName>/` and aggregates each entry. To
+ * add a new template:
+ *
+ *   1. Drop a .indd into the repo-root templates directory.
+ *   2. Create a sibling folder under dashboard/templates/<TemplateName>/
+ *      and put a manifest.json in it with the shape:
+ *        { id, label, file, tile_fields, page_fields, static_frames_note? }
+ *
+ * No code changes required. The new entry is discovered at module load
+ * (cached for the dashboard process lifetime) and shows up on the
+ * picker.
+ *
+ * `id` is the URL/state key, must be unique. `file` is the .indd path
+ * relative to the repo root (NOT relative to the per-template dir).
+ * tile_count is NOT recorded here — resolved at runtime by
+ * dashboard/lib/template-introspect.ts via the bridge.
+ *
+ * Template entries with parse errors are skipped with a server-side
+ * console warning rather than failing the whole load.
  */
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-const REPO_ROOT =
-    process.env.INDESIGN_REPO_ROOT ?? path.resolve(process.cwd(), "..");
-const MANIFEST_PATH = path.join(REPO_ROOT, "templates", "manifest.json");
+const TEMPLATES_DIR = path.resolve(process.cwd(), "templates");
 
 export interface TileField {
     field: string;
@@ -39,16 +53,87 @@ export interface TemplateManifestEntry {
 
 let cache: TemplateManifestEntry[] | null = null;
 
+function isTemplateEntry(v: unknown): v is TemplateManifestEntry {
+    if (typeof v !== "object" || v === null) return false;
+    const o = v as Record<string, unknown>;
+    return (
+        typeof o.id === "string" &&
+        typeof o.label === "string" &&
+        typeof o.file === "string" &&
+        Array.isArray(o.tile_fields) &&
+        Array.isArray(o.page_fields)
+    );
+}
+
 export async function loadManifest(): Promise<TemplateManifestEntry[]> {
     if (cache) return cache;
-    const raw = await fs.readFile(MANIFEST_PATH, "utf8");
-    const parsed = JSON.parse(raw) as { templates?: TemplateManifestEntry[] };
-    if (!parsed.templates || !Array.isArray(parsed.templates)) {
-        throw new Error(
-            `manifest at ${MANIFEST_PATH} is missing a "templates" array`
-        );
+
+    let dirEntries: { name: string; isDirectory: () => boolean }[];
+    try {
+        dirEntries = await fs.readdir(TEMPLATES_DIR, { withFileTypes: true });
+    } catch (e) {
+        const err = e as NodeJS.ErrnoException;
+        if (err.code === "ENOENT") {
+            console.warn(
+                `[manifest] no templates directory at ${TEMPLATES_DIR} — manifest is empty`
+            );
+            cache = [];
+            return cache;
+        }
+        throw e;
     }
-    cache = parsed.templates;
+
+    const folders = dirEntries
+        .filter((d) => d.isDirectory())
+        .map((d) => d.name)
+        .sort();
+
+    const entries: TemplateManifestEntry[] = [];
+    const seenIds = new Set<string>();
+    for (const folder of folders) {
+        const manifestPath = path.join(TEMPLATES_DIR, folder, "manifest.json");
+        let raw: string;
+        try {
+            raw = await fs.readFile(manifestPath, "utf8");
+        } catch (e) {
+            const err = e as NodeJS.ErrnoException;
+            if (err.code === "ENOENT") {
+                console.warn(
+                    `[manifest] no manifest.json in dashboard/templates/${folder} — skipping`
+                );
+                continue;
+            }
+            throw e;
+        }
+
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(raw);
+        } catch (e) {
+            console.warn(
+                `[manifest] dashboard/templates/${folder}/manifest.json is not valid JSON — skipping (${(e as Error).message})`
+            );
+            continue;
+        }
+
+        if (!isTemplateEntry(parsed)) {
+            console.warn(
+                `[manifest] dashboard/templates/${folder}/manifest.json is missing required fields — skipping`
+            );
+            continue;
+        }
+
+        if (seenIds.has(parsed.id)) {
+            console.warn(
+                `[manifest] dashboard/templates/${folder} declares id="${parsed.id}" which was already registered — skipping duplicate`
+            );
+            continue;
+        }
+        seenIds.add(parsed.id);
+        entries.push(parsed);
+    }
+
+    cache = entries;
     return cache;
 }
 

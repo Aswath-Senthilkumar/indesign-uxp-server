@@ -1,0 +1,49 @@
+{
+    "$schema_note": "Per-template manifest. The dashboard scans dashboard/templates/<NAME>/manifest.json and aggregates all entries it finds. Add a new template by dropping a .indd into the repo-root templates/ directory and creating a sibling folder here with this shape.",
+    "id": "recently-leased-ios",
+    "label": "Recently Leased IOS",
+    "file": "templates/Recently_Leased_IOS.indd",
+    "tile_fields": [
+        {
+            "field": "address",
+            "frame_pattern": "tile_{N}_address",
+            "type": "text",
+            "required": true
+        },
+        {
+            "field": "city_state",
+            "frame_pattern": "tile_{N}_city_state",
+            "type": "text",
+            "required": true
+        },
+        {
+            "field": "sf_ac",
+            "frame_pattern": "tile_{N}_sf_ac",
+            "type": "text",
+            "required": true,
+            "format": "±{building_sf:number} SF | ±{land_area:number_2dp} AC"
+        },
+        {
+            "field": "photo",
+            "frame_pattern": "tile_{N}_photo",
+            "type": "image",
+            "required": true,
+            "fit": "fillProportionally"
+        }
+    ],
+    "page_fields": [
+        {
+            "field": "title",
+            "frame": "page_title",
+            "type": "text",
+            "editable": true
+        },
+        {
+            "field": "tagline",
+            "frame": "page_tagline",
+            "type": "text",
+            "editable": true
+        }
+    ],
+    "static_frames_note": "Other named frames in this template (agent names patrick_sior/max_sior, contacts jack_contact/patrick_contact/max_contact, logo, company_info, declaration, decorative *_frame, tile_N tile-background frames) are static and not surfaced in the dashboard. The user manages them in InDesign directly."
+}

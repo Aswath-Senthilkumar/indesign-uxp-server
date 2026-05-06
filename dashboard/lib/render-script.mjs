@@ -114,10 +114,21 @@ export function buildBridgeCode(templatePath, outputPdf, tiles, pageOverrides = 
                 tileTimes.push({ n: t.n, ms: Date.now() - tStart });
             }
 
-            // Apply page-level overrides AFTER tile populate. Each override is
-            // a (frame, value) pair. Skipped frames don't fail the render —
-            // we want a missing page_title (e.g.) to be a soft signal, not a
-            // hard error.
+            // Apply page-level overrides AFTER tile populate. Each override
+            // is a (frame, value) pair. Skipped frames don't fail the render
+            // — a missing page_title (e.g.) is a soft signal.
+            //
+            // Font preservation: InDesign's textFrame.contents setter
+            // already preserves the first character's formatting onto the
+            // new text. An earlier attempt that captured (appliedFont,
+            // pointSize, fontStyle, leading, tracking, ...) from the first
+            // character and re-applied across the new range collapsed the
+            // page_title to the first character's bolder weight, ignoring
+            // the paragraph style's intended typography. The simple
+            // .contents assignment matches the template's font correctly,
+            // so we keep it. If a future template needs deeper preservation
+            // (e.g., per-paragraph style retention) we'll handle it as a
+            // targeted special case.
             for (const ov of pageOverrides) {
                 const f = doc.textFrames.itemByName(ov.frame);
                 if (f.isValid) {

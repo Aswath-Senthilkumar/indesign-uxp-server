@@ -512,3 +512,124 @@ Reply: "works perfectly as expected. what more is left?"
 ### Stage 5.4 status: pass
 
 ---
+
+## Per-template folder structure + page-field font handling (post-5.4 follow-up)
+
+Two requests from the user before continuing to 5.5:
+
+> 1. The page level fields must persist the same font as the existing
+>    value in those frames.
+> 2. Organize dashboard to have folder level setup for each template,
+>    for now all the personalized setup of Recently_Leased_IOS must go
+>    inside a folder of that name, and update all imports accordingly
+>    to make sure the existing workflow is not affected. Any new
+>    template added to the templates directory should just need a
+>    setup under a directory of it's name in the appropriate place in
+>    dashboard to be added to the product to be integrated.
+
+### Per-template folder structure
+
+`templates/manifest.json` (single file, repo root) is gone. Replaced
+by per-template folders under `dashboard/templates/`:
+
+```
+dashboard/templates/
+└── Recently_Leased_IOS/
+    └── manifest.json           # one entry, no top-level "templates" key
+```
+
+`dashboard/lib/manifest.ts` now scans `dashboard/templates/` at module
+load, reads each `<TemplateName>/manifest.json`, validates shape, and
+aggregates into the cached entries array. Behavior is fault-tolerant:
+
+- Missing `dashboard/templates/` → log and return empty array, don't
+  throw.
+- Missing `manifest.json` in a folder → warn and skip that folder.
+- Invalid JSON → warn and skip.
+- Missing required fields (id/label/file/tile_fields/page_fields) →
+  warn and skip.
+- Duplicate id across folders → warn and keep the first.
+
+`getTemplate(id)` and `loadManifest()` keep the same signatures. No
+consumer needed updating: the route handlers, the picker, the page
+fields endpoint, and the introspection utility all use the same
+public API.
+
+To add a new template now:
+
+1. Drop the .indd into `templates/` (repo root, where the asset lives).
+2. Create `dashboard/templates/<TemplateName>/manifest.json` with
+   `{ id, label, file, tile_fields, page_fields }`.
+
+The dashboard picks it up on next module load (a dev-server hot
+reload, or a process restart in prod). No imports to edit.
+
+#### Build issue caught
+
+First version of the new `manifest.ts` had a JSDoc comment containing
+`dashboard/templates/*/manifest.json` — Turbopack interpreted the
+`*/` mid-comment as the comment terminator, then choked on the rest
+parsed as code. Switched to `/* … */` (no JSDoc) without `*/` inside.
+Restart picked up the fix; per-template scan resolves correctly:
+
+```
+GET  /build/template                                 200, "Recently Leased IOS" rendered
+POST /api/templates/recently-leased-ios/introspect   200, tileCount=6
+```
+
+### Page-field font handling — investigation, then revert
+
+User reported the page-level title/tagline rendering bolder than the
+template's intended weight after a previous override.
+
+First attempt: capture `appliedFont`, `pointSize`, `fontStyle`,
+`leading`, `tracking`, `fillColor`, `appliedParagraphStyle`,
+`appliedCharacterStyle` from the first character + first paragraph
+before `frame.contents = value`, then re-apply across the new range.
+
+Visual verification by user:
+
+> The output/render-fontpreserve.pdf file's font is not the same at
+> all, the override sample's text is too bold. The
+> output/render-v5-overrides.pdf file's font is perfect.
+
+Diagnosis: InDesign's `textFrame.contents = value` already preserves
+the first character's formatting onto the new text — for our
+template that gives the right look automatically. The capture-and-
+reapply broke it because:
+
+- Capturing `fontStyle` from the *first* character of "SHEEHAN…" got
+  the bolder weight of that opening word
+- Re-applying that bolder `fontStyle` (and the explicit `appliedFont`)
+  across the entire new override range overrode the paragraph
+  style's intended typography
+
+The simple `frame.contents = value` doesn't have this problem because
+InDesign cleanly inherits paragraph style + first-char attributes
+without our forced overrides on top.
+
+**Reverted to the simple form**, with a comment in `render-script.mjs`
+documenting the experiment so the next person doesn't repeat it.
+
+Verification after revert:
+
+| File | Bytes | Font correct? |
+|---|---|---|
+| `render-v5-overrides.pdf` (pre-experiment) | 273,129 | ✓ matches template |
+| `render-fontpreserve.pdf` (capture-reapply) | 273,175 | ✗ too bold |
+| `render-reverted.pdf` (post-revert) | 273,130 | ✓ matches template (1-byte diff is just PDF timestamp) |
+
+User confirmed `render-reverted.pdf` matches the expected output.
+
+### Files touched
+
+| Path | Change |
+|---|---|
+| `templates/manifest.json` | DELETED — replaced by per-template files |
+| `dashboard/templates/Recently_Leased_IOS/manifest.json` | NEW — single entry for the IOS template |
+| `dashboard/lib/manifest.ts` | scans `dashboard/templates/` instead of reading one file |
+| `dashboard/lib/render-script.mjs` | reverted page-override path; added comment explaining why the simple `.contents = value` is the right call |
+
+### Status: pass
+
+---
