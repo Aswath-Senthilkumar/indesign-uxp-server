@@ -271,3 +271,109 @@ User confirmed: each filter narrows the list as expected, the count
 indicator is correct, the sort options reorder correctly, search
 combines with filters, the clear link works, and selected comps
 persist across filter changes.
+
+---
+
+## Stage 6.4 — Internal dry run with live data
+
+Six scenarios, all passed:
+
+| # | Scenario | Result |
+|---|---|---|
+| 1 | Filter by submarket → pick 6 → render | clean; PDF matched filtered comps |
+| 2 | 6-comp set including 1-2 with no image | clean; missing-image tiles rendered as 20% grey placeholder |
+| 3 | Re-render the same set | visibly faster (cache hit) |
+| 4 | `output/working/` after multiple renders | empty (cleanup confirmed) |
+| 5 | Edit title/tagline on edit stage, render | overrides landed in PDF |
+| 6 | Comp with notably long address | render completed; InDesign text frame truncated overflow gracefully |
+
+User specifically noted on #6: "even a long address where not all of
+it was actually address, handled leaving out the excess and adding
+only address to the team sheet." That's the template's text-frame
+overflow behavior catching real-world data variability — useful to
+know it degrades cleanly rather than blowing the layout.
+
+---
+
+## Stage 6 — One-page summary
+
+### Tracks completed
+
+- **Track A (6.1)** — Supabase client + `getComps()` + swap of
+  mock-data reads in `/build/comps` and `/legacy`.
+- **Track B (6.2)** — Image fetching with 5-min in-memory cache,
+  per-render `output/working/render-{ts}-{hex}/` directory, finally-
+  block cleanup, missing-image policy (b) implemented at the bridge.
+- **Track C (6.3)** — Picker filters: search broadened to include
+  property_name; submarket dropdown; status multi-select chips;
+  sale-date range presets; sort by date / price / SF; "Clear filters"
+  link; live "X of Y shown" count.
+
+### Live data scale
+
+- 281 internal-deal rows visible on `/build/comps` (vs. 7 mock).
+- Of a sampled 10 rows, 6 had `image_url = NULL` — so roughly
+  half-or-more of the live data has no usable photo. The (b) policy
+  surfaces this cleanly as a grey placeholder rather than a stock
+  fallback or hard fail.
+- 11 distinct submarket clusters (incl. one NULL bucket).
+- 7 distinct status values (incl. NULL).
+
+### Render times (6-tile sheet)
+
+| Run | Wall | Notes |
+|---|---|---|
+| Cold (fresh dashboard) | ~8s | dominated by InDesign place/fit/export, not image fetch |
+| Same set, cache hit | ~6s | ~25% speedup |
+| Different set, cold images | ~6s | InDesign work is the floor |
+
+### Data-quality observations to share back
+
+- Significant share of `image_url` nulls. If team sheets grow into
+  the primary use case, getting Hannah / the team a workflow to
+  upload photos for high-value comps would be the highest-impact
+  data improvement.
+- Apparent address-level "duplicates" are real — same property,
+  multiple deal records (different building_sf, different sale_date).
+  No code action; flagged in case picker users start picking the
+  wrong "version" of a property.
+- One observed comp had non-address content trailing the `address`
+  field; InDesign's text-frame overflow handled it gracefully but
+  it's worth a glance from whoever maintains the table.
+
+### Open items for the user
+
+- Confirm the RLS policy on `comps` in the Supabase dashboard (we
+  enforced read-only via anon-key + select-only code; the dashboard
+  RLS view is the third belt).
+- Decide whether external comps (`internal_deal = false`) are wanted
+  for any future workflow — currently filtered out.
+- Hannah's second template is still the next-major-blocker — orthogonal
+  to Stage 6 but the path beyond depends on it.
+
+### What was intentionally deferred
+
+Per the Stage 6 prompt's "deferred" list, these were scoped out and
+should be revisited if/when needed:
+
+- External comps (`internal_deal = false`) for BOV / brag-sheet
+  workflows
+- Property-type filter on the picker (correlates with submarket;
+  adds clutter for v1)
+- Sort options beyond the three landed (sale_date, sale_price,
+  building_sf)
+- Pagination on the picker (281 rows is fine without it)
+- Image upload affordance for comps with missing photos
+- Persistent caching beyond per-process in-memory (5-min TTL)
+- Supabase real-time subscriptions for live updates
+- Cross-checking comps against booking statements for data quality
+- Multi-template workflow (waiting on Hannah's second `.indd`)
+
+### Status
+
+**Complete.** Live-data integration works end-to-end: picker loads
+281 comps, filters/sorts/searches them, renders any 6-comp selection
+through the bridge with fetched-and-cached images, cleans up after
+itself, surfaces clear errors when something goes wrong, and ships a
+PDF that matches the source data including a grey placeholder for
+missing photos. Ready for tagging as `stage-6-complete`.
