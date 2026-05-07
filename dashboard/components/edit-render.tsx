@@ -55,9 +55,9 @@ interface RenderApiError {
     details?: Array<{ field: string; message: string }>;
 }
 
-function imageSrc(filename: string) {
-    return `/api/images/${encodeURIComponent(filename)}`;
-}
+// Stage 6: thumbnail src is now Comp.image_url (a Supabase storage URL)
+// instead of a local mock-data filename routed through /api/images.
+// Track B handles the same data on the render path (fetch -> temp file).
 
 // Tile-grid column class. When the template's manifest declares
 // `grid.cols`, we use that as the desktop count so the dashboard mirrors
@@ -138,14 +138,14 @@ function SortableTileCard({ comp, index, onRemove }: SortableTileCardProps) {
                     ×
                 </button>
             </div>
-            {imgFailed ? (
+            {imgFailed || !comp.image_url ? (
                 <div className="flex h-24 w-full items-center justify-center rounded-md bg-muted text-xs text-muted-foreground">
                     No image
                 </div>
             ) : (
                 /* eslint-disable-next-line @next/next/no-img-element */
                 <img
-                    src={imageSrc(comp.image_filename)}
+                    src={comp.image_url}
                     alt=""
                     loading="lazy"
                     onError={() => setImgFailed(true)}

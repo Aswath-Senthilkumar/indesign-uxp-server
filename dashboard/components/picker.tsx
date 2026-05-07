@@ -13,9 +13,9 @@ interface PickerProps {
 
 const TARGET_COUNT = 6;
 
-function imageSrc(filename: string): string {
-    return `/api/images/${encodeURIComponent(filename)}`;
-}
+// Stage 6: comps now carry a fully-qualified Supabase storage URL
+// (or null) instead of a local mock-data filename — see comps-picker.tsx
+// for the same change in the primary build flow.
 
 function compMatchesQuery(c: Comp, q: string): boolean {
     if (q.length === 0) return true;
@@ -206,15 +206,22 @@ export default function Picker({ comps }: PickerProps) {
                                                     : "hover:bg-muted/30"
                                         }`}
                                     >
-                                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                                        <img
-                                            src={imageSrc(c.image_filename)}
-                                            alt=""
-                                            loading="lazy"
-                                            width={60}
-                                            height={60}
-                                            className="h-[60px] w-[60px] rounded-md object-cover bg-muted shrink-0"
-                                        />
+                                        {c.image_url ? (
+                                            // eslint-disable-next-line @next/next/no-img-element
+                                            <img
+                                                src={c.image_url}
+                                                alt=""
+                                                loading="lazy"
+                                                width={60}
+                                                height={60}
+                                                className="h-[60px] w-[60px] rounded-md object-cover bg-muted shrink-0"
+                                            />
+                                        ) : (
+                                            <div
+                                                aria-label="No image"
+                                                className="h-[60px] w-[60px] shrink-0 rounded-md bg-muted"
+                                            />
+                                        )}
                                         <div className="flex-1 min-w-0">
                                             <p className="truncate text-sm font-medium">
                                                 {c.address}

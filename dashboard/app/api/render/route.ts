@@ -26,7 +26,6 @@ import { NextResponse } from "next/server";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import {
-    type Comp,
     formatSfAc,
     validateRenderRequest,
 } from "@/lib/format";
@@ -37,7 +36,6 @@ const BRIDGE_URL = "http://127.0.0.1:3000";
 
 const REPO_ROOT =
     process.env.INDESIGN_REPO_ROOT ?? path.resolve(process.cwd(), "..");
-const IMAGES_DIR = path.join(REPO_ROOT, "mock-data", "images");
 const OUTPUT_DIR = path.join(REPO_ROOT, "output");
 
 type Json = Record<string, unknown>;
@@ -75,22 +73,6 @@ async function bridgeExecute(code: string): Promise<unknown> {
         throw err;
     }
     return body.result;
-}
-
-async function checkImagesExist(comps: Comp[]): Promise<{ ok: true } | { ok: false; missing: string[] }> {
-    const missing: string[] = [];
-    for (const c of comps) {
-        const p = path.join(IMAGES_DIR, c.image_filename);
-        try {
-            const stat = await fs.stat(p);
-            if (stat.size < 10 * 1024) {
-                missing.push(`${c.image_filename} (only ${stat.size} bytes)`);
-            }
-        } catch {
-            missing.push(c.image_filename);
-        }
-    }
-    return missing.length === 0 ? { ok: true } : { ok: false, missing };
 }
 
 async function bestEffortUnlink(p: string): Promise<void> {
@@ -138,13 +120,10 @@ export async function POST(request: Request) {
         );
     }
 
-    const imageCheck = await checkImagesExist(comps);
-    if (!imageCheck.ok) {
-        return NextResponse.json(
-            { error: "image files missing or too small", missing: imageCheck.missing },
-            { status: 400 }
-        );
-    }
+    // Stage 6 Track A interim: the v1 local-image existence check is
+    // gone — comps now carry remote URLs (or null). Track B replaces
+    // this with a fetch-and-write step plus its own error reporting
+    // for missing/404 images.
 
     let status: { connected: boolean; queueDepth: number };
     try {
@@ -172,12 +151,20 @@ export async function POST(request: Request) {
     await fs.mkdir(OUTPUT_DIR, { recursive: true });
     const outputPdf = path.join(OUTPUT_DIR, `dashboard-render-${Date.now()}.pdf`);
 
+    // Stage 6 Track A interim: comps now carry image_url (Supabase
+    // storage URL or null), not a local image_filename. The bridge
+    // still expects a filesystem path. Track B replaces this block
+    // with: fetch each image_url -> write to a per-render temp dir ->
+    // pass that path here. Until Track B lands, we pass image_url
+    // through unchanged so the route compiles; an actual /api/render
+    // call will fail at the InDesign place() step with a clear error,
+    // which is the expected mid-Stage-6 state.
     const tiles = comps.map((c, i) => ({
         n: i + 1,
         address: c.address,
         city_state: `${c.city}, ${c.state}`,
         sf_ac: formatSfAc(c.building_sf, c.land_area),
-        image: path.join(IMAGES_DIR, c.image_filename),
+        image: c.image_url ?? "",
     }));
 
     // Translate page_overrides keyed by manifest field name to the bridge's

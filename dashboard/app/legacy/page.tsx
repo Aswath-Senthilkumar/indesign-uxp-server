@@ -2,33 +2,18 @@
  * Stage 4 picker UI, kept reachable at /legacy during Stage 5
  * development. The Stage 5 build flow at /build/* is the primary
  * entry point; / redirects there.
+ *
+ * Stage 6: source-of-truth swapped from mock-data/comps.json to
+ * Supabase via getComps(). The render path this picker submits into
+ * is broken between Tracks A and B (the route still expects local
+ * image filenames) — fixed in Track B.
  */
 
-import { promises as fs } from "node:fs";
-import path from "node:path";
 import Picker from "@/components/picker";
-import { type Comp } from "@/lib/format";
-
-const REPO_ROOT =
-    process.env.INDESIGN_REPO_ROOT ?? path.resolve(process.cwd(), "..");
-const COMPS_PATH = path.join(REPO_ROOT, "mock-data", "comps.json");
-
-async function loadComps(): Promise<Comp[]> {
-    const raw = await fs.readFile(COMPS_PATH, "utf8");
-    const parsed = JSON.parse(raw) as Comp[];
-    return parsed.map((c) => ({
-        id: c.id,
-        address: c.address,
-        city: c.city,
-        state: c.state,
-        building_sf: c.building_sf,
-        land_area: c.land_area,
-        image_filename: c.image_filename,
-    }));
-}
+import { getComps } from "@/lib/comps";
 
 export default async function LegacyHome() {
-    const comps = await loadComps();
+    const comps = await getComps();
 
     return (
         <main className="mx-auto max-w-5xl px-6 py-10">

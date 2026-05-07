@@ -21,7 +21,7 @@ Frames are named `tile_{N}_{field}` for `N = 1..6`:
 | `address`    | text  | `comp.address`                                  |
 | `city_state` | text  | `${comp.city}, ${comp.state}`                   |
 | `sf_ac`      | text  | `formatSfAc(comp.building_sf, comp.land_area)`  |
-| `photo`      | image | `comp.image_filename` (placed with `fillProportionally`) |
+| `photo`      | image | `comp.image_url` (placed with `fillProportionally`; Track B fetches and caches the file before placement) |
 
 The text mapping lives in [`render-mapping.ts`](./render-mapping.ts) as
 the canonical declaration. Today the runtime is hardcoded to this same

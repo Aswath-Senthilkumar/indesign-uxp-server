@@ -25,7 +25,13 @@ export interface TilePayload {
     address: string;
     city_state: string;
     sf_ac: string;
-    photo: string;
+    /**
+     * Source URL for the photo (Stage 6: nullable Supabase storage URL).
+     * The runtime resolves this to a per-render local file before
+     * passing to the bridge — the bridge only knows how to `place()`
+     * filesystem paths, not URLs. See Track B in STAGE-6-NOTES.md.
+     */
+    photo: string | null;
 }
 
 export function buildTilePayload(comp: Comp): TilePayload {
@@ -33,6 +39,6 @@ export function buildTilePayload(comp: Comp): TilePayload {
         address: comp.address,
         city_state: `${comp.city}, ${comp.state}`,
         sf_ac: formatSfAc(comp.building_sf, comp.land_area),
-        photo: comp.image_filename,
+        photo: comp.image_url,
     };
 }

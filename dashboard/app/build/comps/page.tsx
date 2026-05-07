@@ -1,30 +1,14 @@
-import { promises as fs } from "node:fs";
-import path from "node:path";
 import CompsPicker from "@/components/comps-picker";
-import { type Comp } from "@/lib/format";
+import { getComps } from "@/lib/comps";
 
-const REPO_ROOT =
-    process.env.INDESIGN_REPO_ROOT ?? path.resolve(process.cwd(), "..");
-const COMPS_PATH = path.join(REPO_ROOT, "mock-data", "comps.json");
-
-async function loadComps(): Promise<Comp[]> {
-    const raw = await fs.readFile(COMPS_PATH, "utf8");
-    const parsed = JSON.parse(raw) as Comp[];
-    return parsed.map((c) => ({
-        id: c.id,
-        address: c.address,
-        city: c.city,
-        state: c.state,
-        building_sf: c.building_sf,
-        land_area: c.land_area,
-        image_filename: c.image_filename,
-    }));
-}
-
-// Server Component: reads comps from disk and hands them to the client
-// picker. Selection state is held in BuildState (provider mounted in
-// dashboard/app/build/layout.tsx).
+// Server Component: pulls live comps from Supabase (server-only) and
+// hands them to the client picker. Selection state is held in
+// BuildState (provider mounted in dashboard/app/build/layout.tsx).
+//
+// Stage 6: was reading mock-data/comps.json; now hits Supabase via
+// dashboard/lib/comps.ts. The mock JSON file is intentionally retained
+// on disk as a fallback reference but is no longer wired here.
 export default async function BuildCompsPage() {
-    const comps = await loadComps();
+    const comps = await getComps();
     return <CompsPicker comps={comps} />;
 }

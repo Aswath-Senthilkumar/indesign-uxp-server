@@ -4,6 +4,12 @@
  * formatSfAc duplicates the formatter in `test-render.js`. The Stage 4
  * prompt asked us to share the helper, but the working notes also say
  * test-render.js is stable. A 5-line duplication is the smaller sin.
+ *
+ * Stage 6: Comp grew from the v1 mock-data shape (id, address, city,
+ * state, building_sf, land_area, image_filename) to the live Supabase
+ * shape. `image_filename` is gone — replaced by `image_url` which is a
+ * fully-qualified public bucket URL, nullable. The remaining new
+ * fields are nullable to reflect the messier real-world data.
  */
 
 export interface Comp {
@@ -13,7 +19,14 @@ export interface Comp {
     state: string;
     building_sf: number;
     land_area: number;
-    image_filename: string;
+    image_url: string | null;
+    sale_price: number | null;
+    lease_rate: number | null;
+    status: string | null;
+    property_type: string | null;
+    submarket_cluster: string | null;
+    sub_market: string | null;
+    sale_date: string | null;
 }
 
 export function formatSfAc(building_sf: number, land_area: number): string {
@@ -39,6 +52,9 @@ export interface ValidationError {
     message: string;
 }
 
+// Render-request validator only checks the fields the renderer actually
+// reads. Image handling is separate (Track B): image_url may be null
+// and the render path decides what to do per the missing-image policy.
 const COMP_FIELDS: Array<{ key: keyof Comp; type: "string" | "number" }> = [
     { key: "id", type: "string" },
     { key: "address", type: "string" },
@@ -46,7 +62,6 @@ const COMP_FIELDS: Array<{ key: keyof Comp; type: "string" | "number" }> = [
     { key: "state", type: "string" },
     { key: "building_sf", type: "number" },
     { key: "land_area", type: "number" },
-    { key: "image_filename", type: "string" },
 ];
 
 export function validateRenderRequest(
