@@ -214,3 +214,60 @@ load-bearing optimization.
 - Re-render of same set: noticeably faster.
 - Render of different set: completed cleanly.
 - `output/working/` empty after each render.
+
+---
+
+## Stage 6.3 — Track C: picker filters and search
+
+### Filter set delivered
+
+User confirmed the proposed set with one drop: the missing-image
+visual flag was not built (per user, the muted-grey placeholder card
+in the picker is signal enough on its own).
+
+| Filter / control | Type | Notes |
+|---|---|---|
+| Search | text input | broadened from address/city/state to **address + city + property_name**. `property_name` is the recognizable building name when present (e.g. "Sky Harbor Industrial Center"). |
+| Submarket | single-select dropdown | populated from the live distinct values; null comps surface under "(none)". Default: "All submarkets". |
+| Status | multi-select chip row | toggleable chips for each distinct value. Empty selection means no status constraint (all pass). null comps show as "(none)". |
+| Sale date | single-select dropdown | presets: All time (default), Last 30 days, Last 90 days, Last 6 months, Last 12 months. Comps with null `sale_date` are excluded from any non-"all" range. |
+| Sort by | single-select dropdown | `sale_date DESC` (default), `sale_price DESC`, `building_sf DESC`. All sorts push nulls to the bottom. |
+| Clear filters | link | shown when any filter is non-default; resets all four plus search to defaults. |
+| "X of Y shown" | static line | live count under the filter row. |
+
+### Implementation
+
+Everything is client-side in `dashboard/components/comps-picker.tsx`.
+All 281 comps load once on the server and the picker filters/sorts
+them in a single `useMemo` keyed on the filter state — no extra
+network round-trips per filter change.
+
+Filter state lives in `useState` hooks in the picker; deliberately
+not mirrored to URL params for v1 (refresh resets, accepted).
+
+Selection state stays in `BuildState` and is unaffected by filters —
+a selected comp remains in the "Selected" panel even when filters
+would hide it from the available list. Verified.
+
+Status uses a row of toggleable chip-buttons rather than a true
+multi-select dropdown — fewer distinct values (7) makes chips faster
+to scan and click than a popover. Active chip = filled foreground
+button; inactive = bordered.
+
+The submarket and sort dropdowns wrap the project's existing Base
+UI Select primitive (`dashboard/components/ui/select.tsx`). Base UI's
+`onValueChange` callback delivers `string | null`, so each handler
+guards on null before updating state.
+
+### Schema addition
+
+`property_name` (text, nullable) added to the projection in
+`dashboard/lib/comps.ts` and to the `Comp` interface in
+`dashboard/lib/format.ts`. Used by the broadened search.
+
+### Verification
+
+User confirmed: each filter narrows the list as expected, the count
+indicator is correct, the sort options reorder correctly, search
+combines with filters, the clear link works, and selected comps
+persist across filter changes.

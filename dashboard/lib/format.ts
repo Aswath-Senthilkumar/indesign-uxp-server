@@ -20,6 +20,7 @@ export interface Comp {
     building_sf: number;
     land_area: number;
     image_url: string | null;
+    property_name: string | null;
     sale_price: number | null;
     lease_rate: number | null;
     status: string | null;
