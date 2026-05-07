@@ -6,8 +6,9 @@
  *
  * Stage 5.4 changes:
  *   - Body now uses { template_id, comps, page_overrides?, tile_count }.
- *     template_id is looked up against templates/manifest.json to resolve
- *     the .indd file path; tile_count is carried by the client from the
+ *     template_id is looked up via dashboard/lib/manifest.ts (which scans
+ *     dashboard/templates/<TemplateName>/manifest.json) to resolve the
+ *     .indd file path; tile_count is carried by the client from the
  *     introspection cache so we don't re-query the bridge here.
  *   - page_overrides is an optional map of frame name -> override text;
  *     applied after the per-tile populate, before export. See
@@ -30,7 +31,6 @@ import {
     validateRenderRequest,
 } from "@/lib/format";
 import { getTemplate } from "@/lib/manifest";
-// @ts-expect-error — plain ESM .mjs, no .d.ts; import shape is stable
 import { buildBridgeCode } from "@/lib/render-script.mjs";
 
 const BRIDGE_URL = "http://127.0.0.1:3000";

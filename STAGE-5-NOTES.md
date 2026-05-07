@@ -942,4 +942,62 @@ mapping function uses a switch over a finite set of column counts
 Pending visual confirmation by the user (next reload of /build/edit
 after walking through Template → Comps).
 
+### Optional per-template files filled in (post-5.7 docs/scaffold)
+
+**Request:** with the per-template folder structure in place, add the
+optional companion files to Recently_Leased_IOS so the convention
+ships fully populated and the second template's PR is "drop a folder
+and test." User constraint: no duplicates — imports must reuse the
+shared helpers in `dashboard/lib/format.ts`.
+
+**Files added:**
+
+1. `dashboard/templates/README.md` — top-level convention guide.
+   Documents the per-template folder layout (required `manifest.json`,
+   optional `render-mapping.ts` / `README.md` / `preview.png`), the
+   `manifest.json` field shape, and the 5-step add-a-template
+   procedure. Notes that `preview.png` is not yet wired and that
+   `render-mapping.ts` is a contract/scaffold today (the runtime is
+   still hardcoded to the four Recently_Leased_IOS tile fields).
+2. `dashboard/templates/Recently_Leased_IOS/render-mapping.ts` — the
+   canonical comp → tile-payload declaration. Exports `TilePayload`
+   and `buildTilePayload(comp)`. **Imports** `Comp` and `formatSfAc`
+   from `@/lib/format` rather than redefining them. Keys on the
+   returned object match the manifest's `tile_fields[].field` names
+   (address, city_state, sf_ac, photo).
+3. `dashboard/templates/Recently_Leased_IOS/README.md` — template
+   specifics for humans: 2×3 layout, per-tile field source mapping,
+   editable page fields (title, tagline), and the static frames Hannah
+   manages directly in InDesign (agent name plates, contacts,
+   branding, decorative `*_frame`s, per-tile background `tile_N`
+   rectangles).
+
+**Stale references cleaned up while there:**
+
+- `dashboard/components/template-picker.tsx` empty-state copy used to
+  read "No templates declared in `templates/manifest.json`" — that
+  single-file registry is gone. Updated to reference
+  `dashboard/templates/<TemplateName>/manifest.json`.
+- `dashboard/app/api/render/route.ts` docstring's "looked up against
+  templates/manifest.json" updated to point at the per-folder scanner
+  in `dashboard/lib/manifest.ts`.
+
+**Not changed (intentional):** the pre-existing duplication of
+`formatSfAc` between `dashboard/lib/format.ts` and the standalone
+`test-render.js` CLI script. That copy is documented in format.ts as
+an accepted 5-line duplication (the CLI runs without the dashboard's
+TypeScript build). Out of scope for this pass.
+
+**Runtime is still hardcoded to the four-field shape.** When a second
+template lands with different tile fields, the refactor will:
+
+- Iterate the manifest's `tile_fields` instead of unrolling four
+  named text/rectangle frames in `render-script.mjs`.
+- Import each template's `render-mapping.ts` to build the per-tile
+  payload, replacing the hardcoded mapping in
+  `dashboard/app/api/render/route.ts:175-181`.
+
+Until then, `render-mapping.ts` is documentation that compiles —
+TypeScript-checked but not imported anywhere at runtime.
+
 ---

@@ -110,9 +110,9 @@ export default function TemplatePicker({ templates }: TemplatePickerProps) {
 
             {templates.length === 0 ? (
                 <Card className="p-6 text-sm text-muted-foreground">
-                    No templates declared in{" "}
+                    No templates found under{" "}
                     <code className="rounded bg-muted px-1 py-0.5 text-xs">
-                        templates/manifest.json
+                        dashboard/templates/&lt;TemplateName&gt;/manifest.json
                     </code>
                     .
                 </Card>
