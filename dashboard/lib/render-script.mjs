@@ -38,6 +38,10 @@ const lit = (s) => JSON.stringify(s);
 
 /**
  * @typedef {{ n: number, address: string, city_state: string, sf_ac: string, image: string }} BridgeTile
+ *   `image` is the absolute filesystem path to the placed photo, or
+ *   the empty string. Empty string is the Stage 6 (b) policy: leave
+ *   the photo rectangle blank so the rendered PDF shows the
+ *   template's default fill (typically the muted grey background).
  */
 
 /**
@@ -70,6 +74,7 @@ export function buildBridgeCode(templatePath, outputPdf, tiles, pageOverrides = 
         const pageOverrides = ${JSON.stringify(pageOverrides)};
         const t0 = Date.now();
         const tileTimes = [];
+        const tilesWithoutImage = [];
         const appliedOverrides = [];
         const skippedOverrides = [];
 
@@ -106,10 +111,36 @@ export function buildBridgeCode(templatePath, outputPdf, tiles, pageOverrides = 
 
                 const rect = doc.rectangles.itemByName(prefix + 'photo');
                 if (!rect.isValid) throw new Error(prefix + 'photo not found');
-                try { rect.place(t.image); }
-                catch (e) { throw new Error('place failed for tile ' + t.n + ': ' + (e.message || String(e))); }
-                try { rect.fit(FitOptions.fillProportionally); }
-                catch (e) { throw new Error('fit failed for tile ' + t.n + ': ' + (e.message || String(e))); }
+                if (t.image) {
+                    try { rect.place(t.image); }
+                    catch (e) { throw new Error('place failed for tile ' + t.n + ': ' + (e.message || String(e))); }
+                    try { rect.fit(FitOptions.fillProportionally); }
+                    catch (e) { throw new Error('fit failed for tile ' + t.n + ': ' + (e.message || String(e))); }
+                } else {
+                    // Stage 6 (b): no usable image. The template was
+                    // authored with example aerials placed in each photo
+                    // rect for layout reference. Two steps:
+                    //   1. Remove the placeholder graphic so the stock
+                    //      aerial doesn't bleed into a "no image" comp.
+                    //   2. Fill the cleared rect with 20% black (light
+                    //      grey) so the slot reads as an intentional
+                    //      placeholder rather than empty chrome. Rect
+                    //      geometry is untouched — same dimensions as
+                    //      a populated tile.
+                    // Both steps soft-fail: if either can't run, the
+                    // render still completes (worst case is the
+                    // template's placeholder stays visible).
+                    try {
+                        if (rect.graphics.length > 0) {
+                            rect.graphics.everyItem().remove();
+                        }
+                    } catch (e) { /* non-fatal */ }
+                    try {
+                        rect.fillColor = doc.swatches.itemByName('Black');
+                        rect.fillTint = 20;
+                    } catch (e) { /* non-fatal */ }
+                    tilesWithoutImage.push(t.n);
+                }
 
                 tileTimes.push({ n: t.n, ms: Date.now() - tStart });
             }
@@ -150,6 +181,7 @@ export function buildBridgeCode(templatePath, outputPdf, tiles, pageOverrides = 
                 exportMs,
                 totalMs: Date.now() - t0,
                 tileTimes,
+                tilesWithoutImage,
                 appliedOverrides,
                 skippedOverrides
             };

@@ -148,3 +148,69 @@ No console or terminal errors. Track A passes.
   unique. If team-sheet users start picking the wrong "version" of a
   property, revisit with a sale_date-newest dedupe or a
   `(address, sale_date)` uniqueness hint.
+
+---
+
+## Stage 6.2 — Track B: image fetching and per-render disk staging
+
+### Files
+
+| Path | Status | Purpose |
+|---|---|---|
+| `dashboard/lib/images.ts` | new | `fetchImage(url)` with a process-lifetime `Map` cache, 5-min TTL. Returns bytes + an extension chosen from `Content-Type` (falls back to URL extension, then `jpg`). Errors thrown carry the URL and HTTP status. |
+| `dashboard/lib/render-script.mjs` | modified | Per-tile photo handling now branches on `t.image`: when present, place + fit (unchanged); when empty, two soft-failing steps clear the template's placeholder graphic and apply a 20% black fill so the rect reads as an intentional grey placeholder. Bridge result now reports `tilesWithoutImage` for visibility. |
+| `dashboard/app/api/render/route.ts` | rewritten | New per-render lifecycle: `output/working/render-{ts}-{shortId}/` is created, each comp's image URL is fetched via the cache and written to `<comp.id>.<ext>` inside that dir, the absolute path goes to the bridge, then the dir is deleted in a `finally` block (success or failure). New response headers `X-Render-Image-Fetch-Ms`, `X-Render-Image-Fetched`, `X-Render-Image-Cache-Hits`, `X-Render-Image-Skipped-Null`, `X-Render-Image-Failures`, `X-Render-Tiles-Blank` surface what the route did with the image set. |
+
+### Missing-image policy: option (b) — render with the photo frame blanked
+
+User picked (b). Implementation:
+
+1. Comp with `image_url = NULL` → route passes `image: ""` to the
+   bridge for that tile.
+2. Fetch failure (404 / network / non-image content) → also `image: ""`.
+   Captured in the response's `X-Render-Image-Failures` header.
+3. Bridge sees the empty `t.image`, removes the photo rect's
+   placeholder graphic (`rect.graphics.everyItem().remove()`), and
+   sets the rect's fill to 20% black. Geometry is untouched.
+
+The first iteration tried "skip place() entirely" — but the source
+template was authored with example aerials placed in each photo rect
+for layout reference, so doing nothing left the stock photo visible
+on the no-image tile. Active clear + grey fill resolves it.
+
+### Per-render isolation
+
+`output/working/render-{timestamp}-{8 hex chars}/` per request. Holds
+the fetched image bytes only — the .indd is still loaded via in-memory
+`OpenOptions.openCopy` (Stage 4 pattern unchanged). Cleanup runs in a
+`finally` block so the dir disappears whether the render succeeds,
+fails at the bridge, or fails reading the PDF back. Verified after
+multiple back-to-back renders: `output/working/` is empty.
+
+### Cache behavior
+
+In-memory `Map<url, {bytes, ext, fetchedAt}>` keyed by URL. 5-minute
+TTL. Cleared on dashboard restart. Goal is back-to-back renders of the
+same comp set being faster, not long-term storage.
+
+Wall-time observations (6-tile render, fresh dashboard process):
+
+| Run | Wall time |
+|---|---|
+| First render (cold cache) | ~8s |
+| Same set re-rendered | ~6s |
+| Different 6 comps | ~6s |
+
+Cache provides a ~25% speedup. The remaining time is dominated by
+InDesign place/fit/export rather than image fetching, so the cache
+benefit is modest by design — sweetens repeated runs, not a
+load-bearing optimization.
+
+### Verification
+
+- Render of mixed set (5 comps with photos + 1 without) produced a
+  PDF with 5 placed aerials and 1 grey-fill placeholder rect at the
+  correct tile position. Tile geometry matched the populated tiles.
+- Re-render of same set: noticeably faster.
+- Render of different set: completed cleanly.
+- `output/working/` empty after each render.

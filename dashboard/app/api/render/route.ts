@@ -4,18 +4,26 @@
  * Forwards a render request to the InDesign bridge:
  *   client -> Next.js API route -> bridge (127.0.0.1:3000) -> plugin -> InDesign DOM
  *
- * Stage 5.4 changes:
- *   - Body now uses { template_id, comps, page_overrides?, tile_count }.
- *     template_id is looked up via dashboard/lib/manifest.ts (which scans
- *     dashboard/templates/<TemplateName>/manifest.json) to resolve the
- *     .indd file path; tile_count is carried by the client from the
- *     introspection cache so we don't re-query the bridge here.
- *   - page_overrides is an optional map of frame name -> override text;
- *     applied after the per-tile populate, before export. See
- *     dashboard/lib/render-script.mjs for the bridge-side handling.
+ * Body shape: { template_id, comps, page_overrides?, tile_count }.
+ * template_id is looked up via dashboard/lib/manifest.ts (which scans
+ * dashboard/templates/<TemplateName>/manifest.json) to resolve the
+ * .indd file path; tile_count is carried by the client from the
+ * introspection cache so we don't re-query the bridge here.
  *
- * Per-render isolation: in-memory `OpenOptions.openCopy` (Stage 4.x).
- * The original template file is never bound, locked, or modified.
+ * Per-render isolation: in-memory `OpenOptions.openCopy` (Stage 4.x)
+ * for the .indd; on-disk per-render working directory for fetched
+ * comp images (Stage 6 Track B). The original template file is never
+ * bound, locked, or modified.
+ *
+ * Stage 6 Track B image flow:
+ *   1. For each comp, if image_url is non-null, fetch the bytes via
+ *      dashboard/lib/images.ts (process-lifetime cache, 5-min TTL)
+ *      and write them to output/working/render-{ts}-{id}/<comp.id>.<ext>.
+ *   2. Pass that absolute path to the bridge as the tile's `image`.
+ *   3. Comps with null image_url (or fetch failure) get an empty
+ *      `image` string — Stage 6 (b) policy: bridge skips place(),
+ *      template's default fill (muted grey) shows in the output.
+ *   4. After response (success or failure), delete the working dir.
  *
  * Output: streams the rendered PDF back as application/pdf for inline
  * preview in the browser. Per-request PDF on disk is cleaned up after
@@ -25,18 +33,22 @@
 import { NextResponse } from "next/server";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { randomBytes } from "node:crypto";
 import {
     formatSfAc,
     validateRenderRequest,
 } from "@/lib/format";
+import type { Comp } from "@/lib/format";
 import { getTemplate } from "@/lib/manifest";
 import { buildBridgeCode } from "@/lib/render-script.mjs";
+import { fetchImage } from "@/lib/images";
 
 const BRIDGE_URL = "http://127.0.0.1:3000";
 
 const REPO_ROOT =
     process.env.INDESIGN_REPO_ROOT ?? path.resolve(process.cwd(), "..");
 const OUTPUT_DIR = path.join(REPO_ROOT, "output");
+const WORKING_DIR = path.join(OUTPUT_DIR, "working");
 
 type Json = Record<string, unknown>;
 
@@ -47,9 +59,18 @@ interface BridgeResult {
     exportMs?: number;
     totalMs?: number;
     tileTimes?: Array<{ n: number; ms: number }>;
+    tilesWithoutImage?: number[];
     appliedOverrides?: string[];
     skippedOverrides?: string[];
     closeWarning?: string;
+}
+
+interface ImageFetchSummary {
+    fetched: number;
+    cacheHits: number;
+    skippedNull: number;
+    failures: Array<{ compId: string; url: string; error: string }>;
+    totalMs: number;
 }
 
 async function bridgeStatus(): Promise<{ connected: boolean; queueDepth: number }> {
@@ -83,6 +104,64 @@ async function bestEffortUnlink(p: string): Promise<void> {
     }
 }
 
+async function bestEffortRmdir(p: string): Promise<void> {
+    try {
+        await fs.rm(p, { recursive: true, force: true });
+    } catch {
+        /* working dir cleanup is non-fatal */
+    }
+}
+
+/**
+ * Resolve each comp's image to either an absolute filesystem path
+ * (after fetching + writing into the working dir) or "" (Stage 6 (b):
+ * leave the photo frame blank). Failures are captured per-comp and
+ * surfaced in the response headers; they don't fail the render.
+ */
+async function fetchAndStageImages(
+    comps: Comp[],
+    workingDir: string
+): Promise<{ paths: string[]; summary: ImageFetchSummary }> {
+    const tStart = Date.now();
+    const paths: string[] = [];
+    const summary: ImageFetchSummary = {
+        fetched: 0,
+        cacheHits: 0,
+        skippedNull: 0,
+        failures: [],
+        totalMs: 0,
+    };
+
+    for (const c of comps) {
+        if (!c.image_url) {
+            summary.skippedNull++;
+            paths.push("");
+            continue;
+        }
+        try {
+            const img = await fetchImage(c.image_url);
+            if (img.cacheHit) summary.cacheHits++;
+            else summary.fetched++;
+            const filename = `${c.id}.${img.ext}`;
+            const abs = path.join(workingDir, filename);
+            await fs.writeFile(abs, img.bytes);
+            paths.push(abs);
+        } catch (e) {
+            summary.failures.push({
+                compId: c.id,
+                url: c.image_url,
+                error: (e as Error).message,
+            });
+            // Treat fetch failure the same as null per (b) policy:
+            // empty path -> bridge skips place().
+            paths.push("");
+        }
+    }
+
+    summary.totalMs = Date.now() - tStart;
+    return { paths, summary };
+}
+
 export async function POST(request: Request) {
     const tCallStart = Date.now();
 
@@ -102,7 +181,6 @@ export async function POST(request: Request) {
     }
     const { template_id, comps, page_overrides } = validation.request;
 
-    // Manifest lookup -> file path
     const tpl = await getTemplate(template_id);
     if (!tpl) {
         return NextResponse.json(
@@ -119,11 +197,6 @@ export async function POST(request: Request) {
             { status: 500 }
         );
     }
-
-    // Stage 6 Track A interim: the v1 local-image existence check is
-    // gone — comps now carry remote URLs (or null). Track B replaces
-    // this with a fetch-and-write step plus its own error reporting
-    // for missing/404 images.
 
     let status: { connected: boolean; queueDepth: number };
     try {
@@ -149,110 +222,136 @@ export async function POST(request: Request) {
     }
 
     await fs.mkdir(OUTPUT_DIR, { recursive: true });
-    const outputPdf = path.join(OUTPUT_DIR, `dashboard-render-${Date.now()}.pdf`);
+    await fs.mkdir(WORKING_DIR, { recursive: true });
+    const renderId = `${Date.now()}-${randomBytes(4).toString("hex")}`;
+    const renderDir = path.join(WORKING_DIR, `render-${renderId}`);
+    await fs.mkdir(renderDir, { recursive: true });
+    const outputPdf = path.join(OUTPUT_DIR, `dashboard-render-${renderId}.pdf`);
 
-    // Stage 6 Track A interim: comps now carry image_url (Supabase
-    // storage URL or null), not a local image_filename. The bridge
-    // still expects a filesystem path. Track B replaces this block
-    // with: fetch each image_url -> write to a per-render temp dir ->
-    // pass that path here. Until Track B lands, we pass image_url
-    // through unchanged so the route compiles; an actual /api/render
-    // call will fail at the InDesign place() step with a clear error,
-    // which is the expected mid-Stage-6 state.
-    const tiles = comps.map((c, i) => ({
-        n: i + 1,
-        address: c.address,
-        city_state: `${c.city}, ${c.state}`,
-        sf_ac: formatSfAc(c.building_sf, c.land_area),
-        image: c.image_url ?? "",
-    }));
+    try {
+        const { paths: imagePaths, summary: imageSummary } =
+            await fetchAndStageImages(comps, renderDir);
 
-    // Translate page_overrides keyed by manifest field name to the bridge's
-    // (frame, value) shape. Only fields that exist in the manifest's
-    // page_fields and are marked editable are forwarded — anything else the
-    // client might send is ignored. Empty strings are skipped (treat empty
-    // input as "leave the template default alone").
-    const editableByField = new Map<string, string>();
-    for (const pf of tpl.page_fields) {
-        if (pf.editable) editableByField.set(pf.field, pf.frame);
-    }
-    const bridgeOverrides: Array<{ frame: string; value: string }> = [];
-    for (const [field, value] of Object.entries(page_overrides ?? {})) {
-        const frame = editableByField.get(field);
-        if (frame && value.length > 0) {
-            bridgeOverrides.push({ frame, value });
+        const tiles = comps.map((c, i) => ({
+            n: i + 1,
+            address: c.address,
+            city_state: `${c.city}, ${c.state}`,
+            sf_ac: formatSfAc(c.building_sf, c.land_area),
+            image: imagePaths[i],
+        }));
+
+        // Translate page_overrides keyed by manifest field name to the bridge's
+        // (frame, value) shape. Only fields that exist in the manifest's
+        // page_fields and are marked editable are forwarded. Empty strings
+        // are skipped (treat empty input as "leave the template default alone").
+        const editableByField = new Map<string, string>();
+        for (const pf of tpl.page_fields) {
+            if (pf.editable) editableByField.set(pf.field, pf.frame);
         }
-    }
-
-    let result: BridgeResult | null = null;
-    let bridgeError: (Error & { httpStatus?: number }) | null = null;
-
-    try {
-        const code = buildBridgeCode(templatePath, outputPdf, tiles, bridgeOverrides) as string;
-        result = (await bridgeExecute(code)) as BridgeResult;
-    } catch (e) {
-        bridgeError = e as Error & { httpStatus?: number };
-    }
-
-    if (bridgeError) {
-        return NextResponse.json(
-            { error: "bridge call failed", detail: bridgeError.message },
-            {
-                status:
-                    bridgeError.httpStatus && bridgeError.httpStatus >= 400
-                        ? bridgeError.httpStatus
-                        : 502,
+        const bridgeOverrides: Array<{ frame: string; value: string }> = [];
+        for (const [field, value] of Object.entries(page_overrides ?? {})) {
+            const frame = editableByField.get(field);
+            if (frame && value.length > 0) {
+                bridgeOverrides.push({ frame, value });
             }
-        );
-    }
+        }
 
-    if (!result || result.ok !== true) {
-        return NextResponse.json(
-            {
-                error: "render returned failure",
-                detail: result?.error ?? "unknown",
-                pluginResult: result,
+        let result: BridgeResult | null = null;
+        let bridgeError: (Error & { httpStatus?: number }) | null = null;
+
+        try {
+            const code = buildBridgeCode(
+                templatePath,
+                outputPdf,
+                tiles,
+                bridgeOverrides
+            ) as string;
+            result = (await bridgeExecute(code)) as BridgeResult;
+        } catch (e) {
+            bridgeError = e as Error & { httpStatus?: number };
+        }
+
+        if (bridgeError) {
+            return NextResponse.json(
+                { error: "bridge call failed", detail: bridgeError.message },
+                {
+                    status:
+                        bridgeError.httpStatus && bridgeError.httpStatus >= 400
+                            ? bridgeError.httpStatus
+                            : 502,
+                }
+            );
+        }
+
+        if (!result || result.ok !== true) {
+            return NextResponse.json(
+                {
+                    error: "render returned failure",
+                    detail: result?.error ?? "unknown",
+                    pluginResult: result,
+                },
+                { status: 500 }
+            );
+        }
+
+        let pdfBytes: Buffer;
+        try {
+            pdfBytes = await fs.readFile(outputPdf);
+        } catch (e) {
+            return NextResponse.json(
+                {
+                    error: "render reported success but PDF not found on disk",
+                    expected: outputPdf,
+                    detail: (e as Error).message,
+                },
+                { status: 500 }
+            );
+        }
+
+        bestEffortUnlink(outputPdf).catch(() => {});
+
+        const wallMs = Date.now() - tCallStart;
+        const tilesBlankedFromImageFail = result.tilesWithoutImage ?? [];
+
+        return new Response(new Uint8Array(pdfBytes), {
+            status: 200,
+            headers: {
+                "Content-Type": "application/pdf",
+                "Content-Length": String(pdfBytes.length),
+                "X-Render-Plugin-Total-Ms": String(result.totalMs ?? ""),
+                "X-Render-Populate-Ms": String(result.populateMs ?? ""),
+                "X-Render-Export-Ms": String(result.exportMs ?? ""),
+                "X-Render-Wall-Ms": String(wallMs),
+                "X-Render-Image-Fetch-Ms": String(imageSummary.totalMs),
+                "X-Render-Image-Fetched": String(imageSummary.fetched),
+                "X-Render-Image-Cache-Hits": String(imageSummary.cacheHits),
+                ...(imageSummary.skippedNull > 0
+                    ? { "X-Render-Image-Skipped-Null": String(imageSummary.skippedNull) }
+                    : {}),
+                ...(imageSummary.failures.length > 0
+                    ? {
+                          "X-Render-Image-Failures": String(
+                              imageSummary.failures.length
+                          ),
+                      }
+                    : {}),
+                ...(tilesBlankedFromImageFail.length > 0
+                    ? {
+                          "X-Render-Tiles-Blank": tilesBlankedFromImageFail.join(","),
+                      }
+                    : {}),
+                ...(result.appliedOverrides && result.appliedOverrides.length > 0
+                    ? { "X-Render-Applied-Overrides": result.appliedOverrides.join(",") }
+                    : {}),
+                ...(result.skippedOverrides && result.skippedOverrides.length > 0
+                    ? { "X-Render-Skipped-Overrides": result.skippedOverrides.join(",") }
+                    : {}),
+                ...(result.closeWarning
+                    ? { "X-Render-Close-Warning": result.closeWarning.slice(0, 200) }
+                    : {}),
             },
-            { status: 500 }
-        );
+        });
+    } finally {
+        bestEffortRmdir(renderDir).catch(() => {});
     }
-
-    let pdfBytes: Buffer;
-    try {
-        pdfBytes = await fs.readFile(outputPdf);
-    } catch (e) {
-        return NextResponse.json(
-            {
-                error: "render reported success but PDF not found on disk",
-                expected: outputPdf,
-                detail: (e as Error).message,
-            },
-            { status: 500 }
-        );
-    }
-
-    bestEffortUnlink(outputPdf).catch(() => {});
-
-    const wallMs = Date.now() - tCallStart;
-
-    return new Response(new Uint8Array(pdfBytes), {
-        status: 200,
-        headers: {
-            "Content-Type": "application/pdf",
-            "Content-Length": String(pdfBytes.length),
-            "X-Render-Plugin-Total-Ms": String(result.totalMs ?? ""),
-            "X-Render-Populate-Ms": String(result.populateMs ?? ""),
-            "X-Render-Export-Ms": String(result.exportMs ?? ""),
-            "X-Render-Wall-Ms": String(wallMs),
-            ...(result.appliedOverrides && result.appliedOverrides.length > 0
-                ? { "X-Render-Applied-Overrides": result.appliedOverrides.join(",") }
-                : {}),
-            ...(result.skippedOverrides && result.skippedOverrides.length > 0
-                ? { "X-Render-Skipped-Overrides": result.skippedOverrides.join(",") }
-                : {}),
-            ...(result.closeWarning
-                ? { "X-Render-Close-Warning": result.closeWarning.slice(0, 200) }
-                : {}),
-        },
-    });
 }
