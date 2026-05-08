@@ -35,14 +35,21 @@ in `resolveTileFieldValue()`. Keep them in sync.
 
 ## Page-level fields
 
-Each frame appears once on page 1 and once on page 2. The bridge
-applies overrides to **all** matching frames in the document, so a
-single edit on the dashboard updates both pages.
+This template carries different page-level titles per page; the
+tagline is shared. Each editable field surfaces as its own input on
+the dashboard's edit stage. The bridge fans every override to **all**
+text frames matching the configured frame name, so:
 
-| field     | frame          | editable from dashboard? |
-|-----------|----------------|--------------------------|
-| `title`   | `page_title`   | yes |
-| `tagline` | `page_tagline` | yes |
+- `page_1_title` and `page_2_title` each match exactly one frame
+  (their respective pages) → independent values per page.
+- `page_tagline` matches both pages' tagline frames → a single edit
+  updates both.
+
+| field          | frame          | editable from dashboard? |
+|----------------|----------------|--------------------------|
+| `page_1_title` | `page_1_title` | yes |
+| `page_2_title` | `page_2_title` | yes |
+| `tagline`      | `page_tagline` | yes |
 
 ## Static frames (managed in InDesign)
 

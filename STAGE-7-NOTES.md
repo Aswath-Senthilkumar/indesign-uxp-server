@@ -266,4 +266,78 @@ The 6_Tile_Defaults manifest declares only four tile_fields, so the
 generic loop touches only those four frames per tile when rendering
 that template — no spurious frame lookups. Backward compat preserved.
 
-Pending verification (Stage 7.2 verification gate).
+### First-render verification — cleared after a font fix
+
+First end-to-end render of the new template surfaced visual
+corruption on two specific frames: tile 1's status badge rendered
+as `S S S S S S S S` instead of `SOLD & FOR LEASE`; tile 2's
+address rendered as fragmented `S 4 5 5 S 4 5...` characters
+instead of the real street address. Sibling frames on the same
+tiles rendered cleanly.
+
+**Root cause: missing fonts.** The user's system was missing
+`EmojiOne` and `Avenir` (Light / Medium / Black / Heavy). Some
+text frames in the template had been authored with those fonts,
+so when the renderer set `frame.contents = value` the new text
+inherited the missing font and InDesign's silent substitute
+produced glyph garbage. `userInteractionLevel = neverInteract`
+(set in the bridge code so the missing-font dialog doesn't wedge
+the render) hides the warning, so the corruption only shows up in
+the exported PDF.
+
+**Resolution:** user re-typed the placeholder text in the
+affected frames so the formatting reverted to an installed font;
+re-saved the .indd; re-render came out clean.
+
+**Implication for future templates:** before authoring a new
+template, run `Type → Find Font…` on the .indd and resolve any
+missing-font flags. If we ever ship to teammates with different
+font sets, the cleanest fix is for the template to use a font
+we package with the dashboard (or a system-default like Arial /
+Helvetica) for the tile fields the renderer writes into. The
+v1 dashboard doesn't manage fonts.
+
+Stage 7.2 verification gate: cleared. ~20s wall time for a cold
+18-tile render.
+
+### Per-page distinct titles (post-7.2 follow-up)
+
+User noticed during verification: the two pages of the 18-tile
+template carry different titles (page 1's title is the "main"
+heading, page 2's title is a secondary heading), but the tagline is
+identical on both pages. The original manifest had a single
+`page_title` field that fanned out to both pages — that overwrote
+the page-2 title with the page-1 value.
+
+Resolution: user renamed the InDesign frames to `page_1_title`
+(page 1) and `page_2_title` (page 2). The probe confirmed:
+
+```
+page_title:    0 (old name removed)
+page_1_title:  1 (page 1 only)
+page_2_title:  1 (page 2 only)
+page_tagline:  2 (one per page, fans out)
+```
+
+Manifest updated to declare three editable page_fields:
+`page_1_title`, `page_2_title`, `tagline`. The dashboard's edit
+page is fully data-driven from the manifest's page_fields (via
+`/api/templates/[id]/page-fields`); the `humanize()` helper turns
+`page_1_title` into the human label `Page 1 Title`. No code change
+needed beyond the manifest — the page-fields endpoint and the edit
+UI both pick up the new entries automatically.
+
+The fan-out behavior in the bridge stays useful: `tagline →
+page_tagline` matches both pages and updates them in sync;
+`page_1_title` matches one frame (page 1) so only that page
+updates, and likewise for `page_2_title`.
+
+Generalizes naturally for future multi-page templates: shared
+content uses one frame name across pages and gets fanned; per-page
+content uses page-suffixed frame names and stays independent.
+
+### Regression on 6-tile template
+
+User verified after the manifest-driven render refactor: 6-tile
+template renders identically to a Stage 6 PDF. Backward compat
+preserved.

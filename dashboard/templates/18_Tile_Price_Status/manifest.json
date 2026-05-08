@@ -50,8 +50,14 @@
     ],
     "page_fields": [
         {
-            "field": "title",
-            "frame": "page_title",
+            "field": "page_1_title",
+            "frame": "page_1_title",
+            "type": "text",
+            "editable": true
+        },
+        {
+            "field": "page_2_title",
+            "frame": "page_2_title",
             "type": "text",
             "editable": true
         },
@@ -62,5 +68,5 @@
             "editable": true
         }
     ],
-    "static_frames_note": "18 tiles split 3 cols x 3 rows per page across 2 pages. page_title and page_tagline appear once on each page; the bridge fans page-level overrides to all matching frames so both pages stay in sync. Static frames (agent name plates, contact lines, branding/logo, decorative shapes, tile background rects named tile_N) are managed in InDesign directly."
+    "static_frames_note": "18 tiles split 3 cols x 3 rows per page across 2 pages. Page-level frames: page_1_title (page 1 only) and page_2_title (page 2 only) — separate inputs since the two pages carry different titles. page_tagline appears once on each page and shares a name; the bridge fans the override to all matching frames so the tagline is identical on both pages. Static frames (agent name plates, contact lines, branding/logo, decorative shapes, tile background rects named tile_N) are managed in InDesign directly."
 }
