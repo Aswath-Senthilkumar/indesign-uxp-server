@@ -368,7 +368,162 @@ preserved.
 - The card-to-PDF parity matters: it lets the user spot
   "Contact Broker" comps before they render, instead of after.
 
-### Verification pending
+### Verification
 
-User to confirm next render that the cards show status/price and
-match the rendered PDF.
+User confirmed: 18-tile cards show status badge + price line; on-screen
+text matches the rendered PDF; the three page-field inputs (Page 1
+Title, Page 2 Title, Tagline) work as expected; 6-tile cards stay
+unchanged (no status, no price).
+
+---
+
+## Stage 7.4 — Internal dry run with new template
+
+Six scenarios, all confirmed working seamlessly:
+
+| # | Scenario | Result |
+|---|---|---|
+| 1 | Mixed price scenarios — sale, lease, combined, "Contact Broker" all on one render | clean; each tile's price line matched its expected outcome |
+| 2 | Missing-image tiles on the 18-tile template | clean; tiles rendered with the 20% grey placeholder per Stage 6 (b) |
+| 3 | Submarket filter narrow → pick 18 → render | clean; filters compose with the new template |
+| 4 | Repeat render of same set | cache-warm render visibly faster than cold |
+| 5 | Different 18-comp set fresh render | clean; `output/working/` empties between renders |
+| 6 | Template switch mid-session (6-tile then 18-tile) | clean; no spillover, both templates work in sequence |
+
+---
+
+## Stage 7 — One-page summary
+
+### Sub-stages completed
+
+- **7.0 — metadata + frame verification.** Probed the new template
+  for all 108 expected frames; one typo caught and fixed (`tile_2_city_state`).
+- **7.1 — price-line rule.** Investigated the live DB, cross-
+  referenced one of Hannah's existing sample sheets, landed on
+  `price_line_v1` plus a status badge transform table. Two transforms
+  inferred from a single screenshot and flagged for Max review.
+- **7.2 — manifest-driven render refactor + new template entry.**
+  The bridge code is now field-agnostic; a new template integrates as
+  manifest folder + (optional) render-mapping scaffold + (optional)
+  README. Verification cleared after a font fix in the user's .indd.
+  Per-page distinct-title follow-up landed (`page_1_title` /
+  `page_2_title` separate from a fanned `page_tagline`).
+- **7.3 — tile cards show status + price.** Edit-stage tile cards
+  now display the status badge and price line for templates that
+  declare those fields, sharing the same formatters as the renderer
+  for character-exact parity.
+- **7.4 — dry run.** All six scenarios clean.
+- **Existing-template rename.** `Recently_Leased_IOS` →
+  `6_Tile_Defaults` (file, folder, manifest id/label) for naming
+  consistency across the multi-template set.
+
+### Templates supported
+
+| id | label | tiles (introspected) | pages | tile_fields | page_fields |
+|---|---|---|---|---|---|
+| `6-tile-defaults` | 6 Tiles template with defaults | 6 (2×3) | 1 | address, city_state, sf_ac, photo | title, tagline |
+| `18-tile-price-status` | 18 Tiles Template with defaults along with Price and Status fields | 18 (3×3×2) | 2 | address, city_state, sf_ac, price, status, photo | page_1_title, page_2_title, tagline |
+
+Tile-count introspection got both templates right (6 and 18) without
+the user needing to declare `tile_count` anywhere — the bridge counts
+`tile_N_address` frames.
+
+### Render times
+
+| Render | Wall |
+|---|---|
+| 6-tile cold | ~6s (Stage 6 baseline, unchanged) |
+| 6-tile cached | ~6s (InDesign work dominates; cache speedup is small at 6 tiles) |
+| 18-tile cold | ~20s |
+| 18-tile cached | meaningfully faster (image fetches collapse to cache hits; InDesign place/fit/export still proportional to tile count) |
+
+InDesign's place + fit + export work scales roughly linearly with
+tile count, so 18 tiles is ~3× the wall time of 6 tiles even when
+images cache. Image fetch is a smaller fraction of total time at
+this scale; bigger templates would amortize cache better.
+
+### Data-quality observations from real comps in the 18-tile path
+
+- The `price_line_v1` rule covers the four real outcomes seen:
+  sale-only, lease-only, combined, undisclosed. The "combined" case
+  is rare in the live data (FOR SALE/LEASE rows that have both
+  `sale_price` AND `base_rent_total`) but the rule handles it.
+- The status badge transform table works for the values present in
+  the data. The two inferred transforms (`PENDING → PENDING SALE`,
+  `FOR SALE/LEASE → SOLD & FOR LEASE`) need Max's confirmation
+  before Hannah review.
+- Missing-image rate continues to be ~50%+ of rows; the grey
+  placeholder still reads cleanly at 18 tiles.
+- Hannah's existing sheets hand-curate (cross-row aggregation per
+  property, hand-typed price overrides). The dashboard's auto-render
+  is one comp = one DB row; replication of hand-curated sheets is a
+  v2 conversation, not a v1 bug.
+
+### Lessons for the remaining two templates
+
+The remaining two templates (`TeamBrochure_Airport.indd`,
+`TeamBrochure_NWPhoenix.indd`) are field-identical to
+`18_Tile_Price_Status` per the user. Integration steps for each
+should be:
+
+1. **Frame audit (5 min).** Run `Type → Find Font…` in InDesign on
+   the .indd to surface any missing fonts before authoring. The
+   font-substitution failure mode (Stage 7.2) is invisible until
+   the export PDF surfaces garbage glyphs.
+2. **Frame-name verification (1 min).** Run the introspection probe
+   from Stage 7.0 (or just open `/build/template` and try to advance
+   into `/build/comps` after picking the new template — bridge
+   errors will surface unnamed/misnamed frames).
+3. **Per-template folder (5 min).** Create
+   `dashboard/templates/<TemplateName>/manifest.json` with the same
+   shape as `18_Tile_Price_Status/manifest.json`, just changing
+   `id`, `label`, and `file`. Optionally copy the `render-mapping.ts`
+   and `README.md` (boilerplate reuses cleanly).
+4. **Restart `pnpm dev`.** Manifest cache is module-level; new
+   templates aren't visible until the dev server reloads.
+5. **One end-to-end test render.** No code changes needed — the
+   manifest-driven render refactor handles arbitrary tile-field sets
+   declared in the manifest.
+
+If the new templates' page-level structure differs from
+`page_1_title`/`page_2_title`/`page_tagline`, declare the new
+page_fields in the manifest. The bridge's fan-out behavior covers
+both shared (one frame name across pages) and per-page (unique
+names per page) patterns automatically.
+
+### Open items
+
+- **Max review of inferred status transforms.** `PENDING → "PENDING
+  SALE"` and `FOR SALE/LEASE → "SOLD & FOR LEASE"` were inferred
+  from a single sample sheet. The transform table lives in
+  `dashboard/lib/format.ts` `STATUS_BADGE_MAP` — one constant edit
+  when Max responds.
+- **Cross-row property aggregation (deferred).** Hannah's sheets
+  show "SOLD & FOR LEASE" badges that aggregate separate DB records
+  per address. Out of scope for v1; needs a real product
+  conversation.
+- **Per-tile manual override workflow (deferred).** The DB
+  occasionally lacks data that Hannah hand-types into her existing
+  sheets. A v2 affordance to override per-tile price/status text
+  at the edit stage would close the gap.
+- **Font management (deferred).** No font handling is built in —
+  templates are responsible for using fonts the user's system has
+  installed. If we ever ship to teammates with different font sets,
+  we'll need either a packaged font set or a fallback strategy.
+
+### What was intentionally deferred
+
+- Integrating `TeamBrochure_Airport.indd` and
+  `TeamBrochure_NWPhoenix.indd` (same path as Stage 7, faster on
+  repeat — see lessons above).
+- Status badge color coding per status value (text-only for v1).
+- Parallelizing image fetches (sequential is fine for 18 tiles).
+- Price-line rule sophistication beyond v1 (e.g. a `disclose_price`
+  boolean if Mia's curation needs more granularity).
+
+### Status
+
+**Complete.** Live data renders cleanly through both 6-tile and
+18-tile templates. Manifest-driven render is foundation-grade — the
+remaining two templates ship as manifest folders with no code
+changes. Ready to tag as `stage-7-complete`.
