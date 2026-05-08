@@ -79,12 +79,14 @@ export default function TemplatePicker({ templates }: TemplatePickerProps) {
             const body = (await r.json()) as {
                 tileCount: number;
                 gridCols?: number;
+                tileFieldNames?: string[];
             };
             setTemplate({
                 id: tpl.id,
                 label: tpl.label,
                 tileCount: body.tileCount,
                 gridCols: body.gridCols,
+                tileFieldNames: body.tileFieldNames,
             });
             router.push("/build/comps");
         } catch (e) {

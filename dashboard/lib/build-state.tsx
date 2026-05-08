@@ -29,6 +29,15 @@ export interface SelectedTemplate {
      * one — the edit page falls back to a count-based heuristic.
      */
     gridCols?: number;
+    /**
+     * Stage 7.3: list of tile-field names the selected template declares
+     * (manifest's `tile_fields[].field`). The edit-stage tile cards use
+     * this to decide whether to render optional fields — e.g. the
+     * status badge and price line only show when the template includes
+     * `status` and `price`. Carried through introspection so the edit
+     * page doesn't need a separate manifest fetch.
+     */
+    tileFieldNames?: string[];
 }
 
 export interface BuildState {

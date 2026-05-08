@@ -36,6 +36,10 @@ export async function POST(
             // Echo the manifest's grid hint so the client can drive its
             // edit-stage layout without a second round-trip.
             gridCols: tpl.grid?.cols,
+            // Stage 7.3: ship the tile-field list so the edit-stage tile
+            // cards know which fields the selected template uses (e.g.
+            // whether to render the status badge and price line).
+            tileFieldNames: tpl.tile_fields.map((f) => f.field),
         });
     } catch (e) {
         const msg = (e as Error).message;

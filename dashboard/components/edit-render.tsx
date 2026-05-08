@@ -25,7 +25,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { useBuildState } from "@/lib/build-state";
-import { type Comp, formatSfAc } from "@/lib/format";
+import {
+    type Comp,
+    formatPriceLine,
+    formatSfAc,
+    formatStatusBadge,
+} from "@/lib/format";
 
 interface PageFieldMeta {
     field: string;
@@ -97,9 +102,17 @@ interface SortableTileCardProps {
     comp: Comp;
     index: number;
     onRemove: (id: string) => void;
+    showStatus: boolean;
+    showPrice: boolean;
 }
 
-function SortableTileCard({ comp, index, onRemove }: SortableTileCardProps) {
+function SortableTileCard({
+    comp,
+    index,
+    onRemove,
+    showStatus,
+    showPrice,
+}: SortableTileCardProps) {
     const {
         attributes,
         listeners,
@@ -159,13 +172,31 @@ function SortableTileCard({ comp, index, onRemove }: SortableTileCardProps) {
                 {...listeners}
                 className="cursor-grab select-none active:cursor-grabbing"
             >
-                <p className="truncate text-sm font-medium">{comp.address}</p>
+                <div className="flex items-start justify-between gap-2">
+                    <p className="truncate text-sm font-medium flex-1 min-w-0">
+                        {comp.address}
+                    </p>
+                    {showStatus ? (
+                        <span className="shrink-0 rounded-md border border-border bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-foreground/70">
+                            {formatStatusBadge(comp.status) || "—"}
+                        </span>
+                    ) : null}
+                </div>
                 <p className="truncate text-xs text-muted-foreground">
                     {comp.city}, {comp.state}
                 </p>
                 <p className="mt-1 truncate text-xs text-muted-foreground">
                     {formatSfAc(comp.building_sf, comp.land_area)}
                 </p>
+                {showPrice ? (
+                    <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                        {formatPriceLine({
+                            sale_price: comp.sale_price,
+                            base_rent_total: comp.base_rent_total,
+                            lease_format: comp.lease_format,
+                        })}
+                    </p>
+                ) : null}
             </div>
         </Card>
     );
@@ -517,6 +548,16 @@ export default function EditRender() {
                                             comp={c}
                                             index={i}
                                             onRemove={onRemoveTile}
+                                            showStatus={
+                                                template.tileFieldNames?.includes(
+                                                    "status"
+                                                ) ?? false
+                                            }
+                                            showPrice={
+                                                template.tileFieldNames?.includes(
+                                                    "price"
+                                                ) ?? false
+                                            }
                                         />
                                     </li>
                                 ))}

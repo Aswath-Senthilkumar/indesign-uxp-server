@@ -341,3 +341,34 @@ content uses page-suffixed frame names and stays independent.
 User verified after the manifest-driven render refactor: 6-tile
 template renders identically to a Stage 6 PDF. Backward compat
 preserved.
+
+---
+
+## Stage 7.3 — Tile cards show status + price
+
+### Files
+
+| Path | Status | Purpose |
+|---|---|---|
+| `dashboard/app/api/templates/[id]/introspect/route.ts` | modified | response now includes `tileFieldNames` (the manifest's `tile_fields[].field` list) so the picker can carry it through to BuildState in one round-trip. |
+| `dashboard/lib/build-state.tsx` | modified | `SelectedTemplate.tileFieldNames?: string[]` — optional list of declared tile-field names for the selected template. |
+| `dashboard/components/template-picker.tsx` | modified | reads `tileFieldNames` from the introspect response and stores it on `SelectedTemplate`. |
+| `dashboard/components/edit-render.tsx` | modified | `SortableTileCard` takes `showStatus` / `showPrice` props. Status renders as a small uppercase badge in the card's address row; price line renders as a one-line text element below the SF/AC line, computed via `formatPriceLine` (the same formatter the renderer uses, so on-screen and in-PDF text match exactly). The parent computes `showStatus = tileFieldNames.includes("status")`, etc., so 6-tile cards stay unchanged. |
+
+### Behavior
+
+- 18-tile template: tile cards on `/build/edit` show four lines —
+  address (with status badge inline), city/state, SF/AC, price line.
+  Render-output character match is enforced by sharing
+  `formatPriceLine` and `formatStatusBadge` between the card and the
+  bridge dispatch.
+- 6-tile template: tile cards stay at three lines (address,
+  city/state, SF/AC). No status or price. The conditional rendering
+  is a no-op when `tileFieldNames` doesn't include those names.
+- The card-to-PDF parity matters: it lets the user spot
+  "Contact Broker" comps before they render, instead of after.
+
+### Verification pending
+
+User to confirm next render that the cards show status/price and
+match the rendered PDF.
