@@ -33,7 +33,7 @@ import type { Comp } from "./format";
  *     delete. Filter dropped.
  */
 const PROJECTION =
-    "id, address, city, state, building_sf, land_area, sale_price, rent_psf, status, property_type, submarket_cluster, sub_market, sale_date, image_url, property_name";
+    "id, address, city, state, building_sf, land_area, sale_price, rent_psf, base_rent_total, lease_format, status, property_type, submarket_cluster, sub_market, sale_date, image_url, property_name";
 
 interface CompsRow {
     id: string;
@@ -44,6 +44,8 @@ interface CompsRow {
     land_area: number | null;
     sale_price: number | null;
     rent_psf: number | null;
+    base_rent_total: number | null;
+    lease_format: string | null;
     status: string | null;
     property_type: string | null;
     submarket_cluster: string | null;
@@ -63,6 +65,8 @@ function rowToComp(r: CompsRow): Comp {
         land_area: r.land_area ?? 0,
         sale_price: r.sale_price,
         lease_rate: r.rent_psf,
+        base_rent_total: r.base_rent_total,
+        lease_format: r.lease_format,
         status: r.status,
         property_type: r.property_type,
         submarket_cluster: r.submarket_cluster,

@@ -23,6 +23,8 @@ export interface Comp {
     property_name: string | null;
     sale_price: number | null;
     lease_rate: number | null;
+    base_rent_total: number | null;
+    lease_format: string | null;
     status: string | null;
     property_type: string | null;
     submarket_cluster: string | null;
@@ -34,6 +36,79 @@ export function formatSfAc(building_sf: number, land_area: number): string {
     const sf = building_sf.toLocaleString("en-US");
     const ac = land_area.toFixed(2);
     return `±${sf} SF | ±${ac} AC`;
+}
+
+/*
+ * Stage 7.1 price-line rule (price_line_v1). See STAGE-7-NOTES.md
+ * "Stage 7.1 — Price-line rule" for the data investigation that
+ * grounds these choices.
+ *
+ * Evaluation order:
+ *   1. sale_price + base_rent_total -> "$X,XXX,XXX | $X,XXX/MO [lf]"
+ *   2. sale_price only               -> "$X,XXX,XXX"
+ *   3. base_rent_total only          -> "$X,XXX/MO [lf]"
+ *   4. neither                       -> "Contact Broker"
+ *
+ * `[lf]` is the row's `lease_format` value when non-null, otherwise
+ * omitted entirely (no trailing space).
+ *
+ * `base_rent_total` is monthly dollars (verified against sample data:
+ * 411 S 33rd Ave row has base_rent_total=32,375 and Hannah's existing
+ * sheet renders it as "$32,000/MO NNN"). Do NOT divide by 12.
+ *
+ * `rent_psf` is intentionally not used by this formatter — Hannah's
+ * sheets quote monthly, not per-SF. The column is still projected in
+ * `Comp` for future use but doesn't drive the v1 price line.
+ */
+export interface PriceLineInputs {
+    sale_price: number | null;
+    base_rent_total: number | null;
+    lease_format: string | null;
+}
+
+function formatSale(n: number): string {
+    return `$${Math.round(n).toLocaleString("en-US")}`;
+}
+
+function formatMonthly(n: number, leaseFormat: string | null): string {
+    const base = `$${Math.round(n).toLocaleString("en-US")}/MO`;
+    return leaseFormat ? `${base} ${leaseFormat}` : base;
+}
+
+export function formatPriceLine(inputs: PriceLineInputs): string {
+    const { sale_price, base_rent_total, lease_format } = inputs;
+    const hasSale = sale_price !== null;
+    const hasLease = base_rent_total !== null;
+    if (hasSale && hasLease) {
+        return `${formatSale(sale_price)} | ${formatMonthly(base_rent_total, lease_format)}`;
+    }
+    if (hasSale) return formatSale(sale_price);
+    if (hasLease) return formatMonthly(base_rent_total, lease_format);
+    return "Contact Broker";
+}
+
+/*
+ * Stage 7.1 status badge transform. The DB has 7 distinct values
+ * (six strings + null); the existing sheets show slightly different
+ * text for two of them. PENDING -> "PENDING SALE" and FOR SALE/LEASE
+ * -> "SOLD & FOR LEASE" are inferred from one screenshot of Hannah's
+ * sample sheet — Max needs to confirm production mapping. The other
+ * five are identity / empty.
+ *
+ * Update this table when Max responds.
+ */
+const STATUS_BADGE_MAP: Record<string, string> = {
+    SOLD: "SOLD",
+    "FOR SALE": "FOR SALE",
+    LEASED: "LEASED",
+    "FOR LEASE": "FOR LEASE",
+    PENDING: "PENDING SALE",
+    "FOR SALE/LEASE": "SOLD & FOR LEASE",
+};
+
+export function formatStatusBadge(status: string | null): string {
+    if (status === null) return "";
+    return STATUS_BADGE_MAP[status] ?? status;
 }
 
 export interface RenderRequest {

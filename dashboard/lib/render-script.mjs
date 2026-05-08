@@ -8,40 +8,55 @@
  *
  * Per-render isolation strategy: `OpenOptions.openCopy`.
  *
- *   The original `templates/template-v2-test.indd` is never opened
- *   directly. Each call to `app.open(template, true, OpenOptions.openCopy)`
- *   makes InDesign load the file content into a fresh untitled
- *   document (e.g. `Untitled-7`) with no file backing — its
- *   `fullName` is unreadable and `saved` is false. The original disk
- *   file is never locked, never mutated.
+ *   The original .indd is never opened directly. Each call to
+ *   `app.open(template, true, OpenOptions.openCopy)` makes InDesign
+ *   load the file content into a fresh untitled document with no file
+ *   backing — its `fullName` is unreadable and `saved` is false. The
+ *   original disk file is never locked, never mutated.
  *
  *   We considered an on-disk working-copy variant
  *   (fs.copyFile -> open -> populate -> close -> fs.unlink) but
  *   InDesign 2026 + UXP exhibits a Document.close() limitation: close
- *   on a doc opened from a real on-disk path is a no-op (returns
- *   undefined, no error, doc stays in app.documents, file lock
- *   stays held). Confirmed across multiple probe scenarios. close
- *   works correctly on openCopy/Untitled docs because they have no
- *   on-disk identity — there is no file lock to release and the
- *   doc handle is fully managed by InDesign in memory.
+ *   on a doc opened from a real on-disk path is a no-op. close works
+ *   correctly on openCopy/Untitled docs because they have no on-disk
+ *   identity.
  *
- *   Net result is what the original spec asked for, just in-memory
- *   instead of on-disk: original immutable, per-render isolation,
- *   working copy created and disposed cleanly per render, no orphans.
+ * Stage 7: refactored to be field-agnostic. Each tile carries a
+ * pre-built array of `{ key, type, value }` records (one per declared
+ * tile field in the manifest). The bridge dispatches on `type`:
  *
- * Returns `{ ok: true, populateMs, exportMs, totalMs, tileTimes }` on
- * success or `{ ok: false, error }` on any failure path. `closeWarning`
- * may be set on either if cleanup-close threw.
+ *   - `text`  -> textFrame.itemByName(prefix + key).contents = value
+ *   - `image` -> rectangle.itemByName(prefix + key).place(value) +
+ *               fit, OR clear + 20% grey fill when value is empty
+ *
+ * This means adding a new tile field to a template = adding it to the
+ * manifest's `tile_fields[]` and mapping its name to a value in
+ * route.ts's `resolveTileFieldValue()`. The bridge code itself doesn't
+ * change.
+ *
+ * Stage 7 also added multi-page page-override fan-out: each page
+ * override now updates EVERY text frame matching the given name on
+ * the document, not just the first. Verified against the 18-tile
+ * 2-page template where `page_title` and `page_tagline` each appear
+ * twice (once per page).
  */
 
 const lit = (s) => JSON.stringify(s);
 
 /**
- * @typedef {{ n: number, address: string, city_state: string, sf_ac: string, image: string }} BridgeTile
- *   `image` is the absolute filesystem path to the placed photo, or
- *   the empty string. Empty string is the Stage 6 (b) policy: leave
- *   the photo rectangle blank so the rendered PDF shows the
- *   template's default fill (typically the muted grey background).
+ * @typedef {{ key: string, type: 'text' | 'image', value: string }} BridgeTileField
+ */
+
+/**
+ * @typedef {{ n: number, fields: BridgeTileField[] }} BridgeTile
+ *   For `image` fields, `value` is either an absolute filesystem path
+ *   to the placed photo or the empty string. Empty string is the
+ *   Stage 6 (b) policy: clear the rect's placeholder graphic and fill
+ *   with 20% black so the slot reads as an intentional grey
+ *   placeholder.
+ *
+ *   For `text` fields, `value` is set as-is. Empty string blanks the
+ *   frame (e.g. status with null DB value).
  */
 
 /**
@@ -53,12 +68,12 @@ const lit = (s) => JSON.stringify(s);
  * @param {string} outputPdf             absolute path the plugin should export the PDF to
  * @param {BridgeTile[]} tiles           pre-formatted per-tile data
  * @param {PageOverride[]} [pageOverrides=[]]
- *   Page-level frame overrides. For each entry, the bridge code looks up
- *   the named frame on the working copy and sets its `.contents` to
- *   `value`. Frames that don't exist on the document are skipped silently
- *   and reported in `result.skippedOverrides` so the caller can surface
- *   that information if useful. Empty `value` is allowed and is applied
- *   as-is (becomes an empty frame).
+ *   Each override is applied to EVERY matching text frame in the
+ *   document. Multi-page templates can declare a page-level frame
+ *   once per page (same name on each page); a single override entry
+ *   updates all of them. Frames that don't exist anywhere are
+ *   reported in `result.skippedOverrides`. `result.appliedOverrides`
+ *   carries `{ frame, count }` so the caller can see fan-out.
  * @returns {string}  JS source the bridge will evaluate inside the plugin
  */
 export function buildBridgeCode(templatePath, outputPdf, tiles, pageOverrides = []) {
@@ -81,13 +96,9 @@ export function buildBridgeCode(templatePath, outputPdf, tiles, pageOverrides = 
         let doc;
         let result;
         try {
-            // openCopy = load the file content as a fresh Untitled-N doc.
-            // The original at templatePath is never bound to a Document
-            // handle, so the file lock stays in the OS's hands and the
-            // disk bytes are never written to.
             doc = await app.open(${lit(templatePath)}, true, OpenOptions.openCopy);
             if (!doc) {
-                doc = app.activeDocument; // belt + braces
+                doc = app.activeDocument;
             }
             if (!doc) {
                 throw new Error('app.open returned no document');
@@ -96,75 +107,76 @@ export function buildBridgeCode(templatePath, outputPdf, tiles, pageOverrides = 
             for (const t of tiles) {
                 const tStart = Date.now();
                 const prefix = 'tile_' + t.n + '_';
+                let imageWasBlank = false;
 
-                const fa = doc.textFrames.itemByName(prefix + 'address');
-                if (!fa.isValid) throw new Error(prefix + 'address not found');
-                fa.contents = t.address;
-
-                const fc = doc.textFrames.itemByName(prefix + 'city_state');
-                if (!fc.isValid) throw new Error(prefix + 'city_state not found');
-                fc.contents = t.city_state;
-
-                const fs = doc.textFrames.itemByName(prefix + 'sf_ac');
-                if (!fs.isValid) throw new Error(prefix + 'sf_ac not found');
-                fs.contents = t.sf_ac;
-
-                const rect = doc.rectangles.itemByName(prefix + 'photo');
-                if (!rect.isValid) throw new Error(prefix + 'photo not found');
-                if (t.image) {
-                    try { rect.place(t.image); }
-                    catch (e) { throw new Error('place failed for tile ' + t.n + ': ' + (e.message || String(e))); }
-                    try { rect.fit(FitOptions.fillProportionally); }
-                    catch (e) { throw new Error('fit failed for tile ' + t.n + ': ' + (e.message || String(e))); }
-                } else {
-                    // Stage 6 (b): no usable image. The template was
-                    // authored with example aerials placed in each photo
-                    // rect for layout reference. Two steps:
-                    //   1. Remove the placeholder graphic so the stock
-                    //      aerial doesn't bleed into a "no image" comp.
-                    //   2. Fill the cleared rect with 20% black (light
-                    //      grey) so the slot reads as an intentional
-                    //      placeholder rather than empty chrome. Rect
-                    //      geometry is untouched — same dimensions as
-                    //      a populated tile.
-                    // Both steps soft-fail: if either can't run, the
-                    // render still completes (worst case is the
-                    // template's placeholder stays visible).
-                    try {
-                        if (rect.graphics.length > 0) {
-                            rect.graphics.everyItem().remove();
+                for (const f of t.fields) {
+                    const fullName = prefix + f.key;
+                    if (f.type === 'text') {
+                        const tf = doc.textFrames.itemByName(fullName);
+                        if (!tf.isValid) throw new Error(fullName + ' not found');
+                        tf.contents = f.value;
+                    } else if (f.type === 'image') {
+                        const rect = doc.rectangles.itemByName(fullName);
+                        if (!rect.isValid) throw new Error(fullName + ' not found');
+                        if (f.value) {
+                            try { rect.place(f.value); }
+                            catch (e) { throw new Error('place failed for tile ' + t.n + ' ' + f.key + ': ' + (e.message || String(e))); }
+                            try { rect.fit(FitOptions.fillProportionally); }
+                            catch (e) { throw new Error('fit failed for tile ' + t.n + ' ' + f.key + ': ' + (e.message || String(e))); }
+                        } else {
+                            // Stage 6 (b): no usable image. The template was
+                            // authored with example aerials placed in each
+                            // photo rect for layout reference. Remove the
+                            // placeholder graphic and fill with 20% black so
+                            // the slot reads as an intentional grey block.
+                            // Soft-fail: if either step can't run, the render
+                            // still completes (worst case the placeholder
+                            // stays visible).
+                            try {
+                                if (rect.graphics.length > 0) {
+                                    rect.graphics.everyItem().remove();
+                                }
+                            } catch (e) { /* non-fatal */ }
+                            try {
+                                rect.fillColor = doc.swatches.itemByName('Black');
+                                rect.fillTint = 20;
+                            } catch (e) { /* non-fatal */ }
+                            imageWasBlank = true;
                         }
-                    } catch (e) { /* non-fatal */ }
-                    try {
-                        rect.fillColor = doc.swatches.itemByName('Black');
-                        rect.fillTint = 20;
-                    } catch (e) { /* non-fatal */ }
-                    tilesWithoutImage.push(t.n);
+                    } else {
+                        throw new Error('unknown field type for tile ' + t.n + ' ' + f.key + ': ' + f.type);
+                    }
                 }
 
+                if (imageWasBlank) tilesWithoutImage.push(t.n);
                 tileTimes.push({ n: t.n, ms: Date.now() - tStart });
             }
 
-            // Apply page-level overrides AFTER tile populate. Each override
-            // is a (frame, value) pair. Skipped frames don't fail the render
-            // — a missing page_title (e.g.) is a soft signal.
+            // Apply page-level overrides AFTER tile populate. Stage 7
+            // change: fan out to ALL text frames matching the override's
+            // frame name, not just the first. Multi-page templates can
+            // declare the same frame name on each page (e.g. page_title
+            // on both pages 1 and 2 of an 18-tile template); we want
+            // every copy to receive the override.
             //
             // Font preservation: InDesign's textFrame.contents setter
-            // already preserves the first character's formatting onto the
-            // new text. An earlier attempt that captured (appliedFont,
-            // pointSize, fontStyle, leading, tracking, ...) from the first
-            // character and re-applied across the new range collapsed the
-            // page_title to the first character's bolder weight, ignoring
-            // the paragraph style's intended typography. The simple
-            // .contents assignment matches the template's font correctly,
-            // so we keep it. If a future template needs deeper preservation
-            // (e.g., per-paragraph style retention) we'll handle it as a
-            // targeted special case.
+            // preserves the first character's formatting on each frame.
+            // An earlier capture-and-reapply experiment (Stage 5.x)
+            // collapsed the typography by overriding paragraph styling;
+            // we kept the simple .contents assignment because it matches
+            // the template's intended look.
+            const allTextFrames = doc.textFrames.everyItem().getElements();
             for (const ov of pageOverrides) {
-                const f = doc.textFrames.itemByName(ov.frame);
-                if (f.isValid) {
-                    f.contents = ov.value;
-                    appliedOverrides.push(ov.frame);
+                let count = 0;
+                for (let i = 0; i < allTextFrames.length; i++) {
+                    const tf = allTextFrames[i];
+                    if (tf.name === ov.frame) {
+                        tf.contents = ov.value;
+                        count++;
+                    }
+                }
+                if (count > 0) {
+                    appliedOverrides.push({ frame: ov.frame, count });
                 } else {
                     skippedOverrides.push(ov.frame);
                 }

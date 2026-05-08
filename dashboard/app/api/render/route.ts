@@ -35,11 +35,14 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import {
+    formatPriceLine,
     formatSfAc,
+    formatStatusBadge,
     validateRenderRequest,
 } from "@/lib/format";
 import type { Comp } from "@/lib/format";
 import { getTemplate } from "@/lib/manifest";
+import type { TileField } from "@/lib/manifest";
 import { buildBridgeCode } from "@/lib/render-script.mjs";
 import { fetchImage } from "@/lib/images";
 
@@ -60,7 +63,13 @@ interface BridgeResult {
     totalMs?: number;
     tileTimes?: Array<{ n: number; ms: number }>;
     tilesWithoutImage?: number[];
-    appliedOverrides?: string[];
+    /**
+     * Stage 7: appliedOverrides now reports `{ frame, count }` so the
+     * caller can see fan-out across multi-page templates (e.g. an 18-tile
+     * 2-page template applies a single `page_title` override to two
+     * frames, one per page).
+     */
+    appliedOverrides?: Array<{ frame: string; count: number }>;
     skippedOverrides?: string[];
     closeWarning?: string;
 }
@@ -110,6 +119,70 @@ async function bestEffortRmdir(p: string): Promise<void> {
     } catch {
         /* working dir cleanup is non-fatal */
     }
+}
+
+/**
+ * Resolve a tile field's value from the comp record. Stage 7 made this
+ * the single dispatch point for converting comp data into the strings
+ * the bridge writes into named frames. Add a new tile field by adding
+ * it to the manifest's `tile_fields[]` and adding a case here.
+ *
+ * Image fields are special-cased: the value is the pre-resolved local
+ * filesystem path (or empty string when the comp has no usable image,
+ * per Stage 6 (b)), since the route owns image fetching/staging.
+ */
+function resolveTileFieldValue(
+    field: string,
+    comp: Comp,
+    imagePath: string
+): string {
+    switch (field) {
+        case "address":
+            return comp.address;
+        case "city_state":
+            return `${comp.city}, ${comp.state}`;
+        case "sf_ac":
+            return formatSfAc(comp.building_sf, comp.land_area);
+        case "price":
+            return formatPriceLine({
+                sale_price: comp.sale_price,
+                base_rent_total: comp.base_rent_total,
+                lease_format: comp.lease_format,
+            });
+        case "status":
+            return formatStatusBadge(comp.status);
+        case "photo":
+            return imagePath;
+        default:
+            throw new Error(
+                `unknown tile field "${field}" — declared in manifest but no resolver in dashboard/app/api/render/route.ts`
+            );
+    }
+}
+
+interface BridgeTileField {
+    key: string;
+    type: "text" | "image";
+    value: string;
+}
+
+/**
+ * Build the per-tile bridge payload from the manifest's tile_fields[]
+ * declaration. The bridge code is field-agnostic — it dispatches on
+ * `type` to either set text contents or place an image. Manifest order
+ * controls evaluation order; field name controls the InDesign frame
+ * name (`tile_N_<key>`).
+ */
+function buildTileFields(
+    fieldDefs: TileField[],
+    comp: Comp,
+    imagePath: string
+): BridgeTileField[] {
+    return fieldDefs.map((fd) => ({
+        key: fd.field,
+        type: fd.type,
+        value: resolveTileFieldValue(fd.field, comp, imagePath),
+    }));
 }
 
 /**
@@ -234,10 +307,7 @@ export async function POST(request: Request) {
 
         const tiles = comps.map((c, i) => ({
             n: i + 1,
-            address: c.address,
-            city_state: `${c.city}, ${c.state}`,
-            sf_ac: formatSfAc(c.building_sf, c.land_area),
-            image: imagePaths[i],
+            fields: buildTileFields(tpl.tile_fields, c, imagePaths[i]),
         }));
 
         // Translate page_overrides keyed by manifest field name to the bridge's
@@ -341,7 +411,11 @@ export async function POST(request: Request) {
                       }
                     : {}),
                 ...(result.appliedOverrides && result.appliedOverrides.length > 0
-                    ? { "X-Render-Applied-Overrides": result.appliedOverrides.join(",") }
+                    ? {
+                          "X-Render-Applied-Overrides": result.appliedOverrides
+                              .map((o) => `${o.frame}:${o.count}`)
+                              .join(","),
+                      }
                     : {}),
                 ...(result.skippedOverrides && result.skippedOverrides.length > 0
                     ? { "X-Render-Skipped-Overrides": result.skippedOverrides.join(",") }

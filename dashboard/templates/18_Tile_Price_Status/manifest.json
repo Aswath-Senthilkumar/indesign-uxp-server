@@ -1,0 +1,66 @@
+{
+    "$schema_note": "Per-template manifest. The dashboard scans dashboard/templates/<NAME>/manifest.json and aggregates all entries it finds. Add a new template by dropping a .indd into the repo-root templates/ directory and creating a sibling folder here with this shape.",
+    "id": "18-tile-price-status",
+    "label": "18 Tiles Template with defaults along with Price and Status fields",
+    "file": "templates/18_Tile_Price_Status.indd",
+    "grid": {
+        "cols": 3
+    },
+    "tile_fields": [
+        {
+            "field": "address",
+            "frame_pattern": "tile_{N}_address",
+            "type": "text",
+            "required": true
+        },
+        {
+            "field": "city_state",
+            "frame_pattern": "tile_{N}_city_state",
+            "type": "text",
+            "required": true
+        },
+        {
+            "field": "sf_ac",
+            "frame_pattern": "tile_{N}_sf_ac",
+            "type": "text",
+            "required": true,
+            "format": "±{building_sf:number} SF | ±{land_area:number_2dp} AC"
+        },
+        {
+            "field": "price",
+            "frame_pattern": "tile_{N}_price",
+            "type": "text",
+            "required": false,
+            "rule": "price_line_v1"
+        },
+        {
+            "field": "status",
+            "frame_pattern": "tile_{N}_status",
+            "type": "text",
+            "required": false,
+            "rule": "status_badge_v1"
+        },
+        {
+            "field": "photo",
+            "frame_pattern": "tile_{N}_photo",
+            "type": "image",
+            "required": true,
+            "fit": "fillProportionally"
+        }
+    ],
+    "page_fields": [
+        {
+            "field": "title",
+            "frame": "page_title",
+            "type": "text",
+            "editable": true
+        },
+        {
+            "field": "tagline",
+            "frame": "page_tagline",
+            "type": "text",
+            "editable": true
+        }
+    ],
+    "static_frames_note": "18 tiles split 3 cols x 3 rows per page across 2 pages. page_title and page_tagline appear once on each page; the bridge fans page-level overrides to all matching frames so both pages stay in sync. Static frames (agent name plates, contact lines, branding/logo, decorative shapes, tile background rects named tile_N) are managed in InDesign directly."
+}

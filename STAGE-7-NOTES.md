@@ -229,3 +229,41 @@ The sample sheet's tile 6 (`1702 S 19th Ave`) shows a status badge
 reading `F F F F F F F F` — almost certainly an authoring
 placeholder Hannah forgot to populate, not a real data convention.
 The DB row is plain `SOLD`. Ignored for rule design.
+
+---
+
+## Stage 7.2 — Manifest entry, render refactor, formatters
+
+### Files
+
+| Path | Status | Purpose |
+|---|---|---|
+| `dashboard/lib/format.ts` | modified | adds `formatPriceLine(inputs)` (price_line_v1) and `formatStatusBadge(status)` (status_badge_v1). `Comp` interface grew: `base_rent_total: number \| null`, `lease_format: string \| null`. |
+| `dashboard/lib/comps.ts` | modified | projection adds `base_rent_total` and `lease_format`; `rowToComp` populates them. |
+| `dashboard/lib/render-script.mjs` | rewritten | bridge code is now field-agnostic. Each tile carries `fields: [{ key, type, value }]`; the bridge dispatches on `type` (text → set contents; image → place + fit, OR clear and 20% grey fill when value is empty). Page overrides now fan out to **every** matching text frame in the document — multi-page templates get all copies updated. Result reports `appliedOverrides` as `{ frame, count }` so the caller can see fan-out. |
+| `dashboard/app/api/render/route.ts` | refactored | new `resolveTileFieldValue(field, comp, imagePath)` is the single dispatch from manifest field name → string value. New `buildTileFields(fieldDefs, comp, imagePath)` walks `tpl.tile_fields` and produces the bridge payload. Header `X-Render-Applied-Overrides` now encodes `{frame:count}`. |
+| `dashboard/templates/18_Tile_Price_Status/manifest.json` | new | id `18-tile-price-status`, label as user specified, `grid.cols: 3`, six tile_fields including `price` (rule `price_line_v1`) and `status` (rule `status_badge_v1`), two page_fields. |
+| `dashboard/templates/18_Tile_Price_Status/render-mapping.ts` | new | canonical Comp → tile-payload declaration. Imports `formatPriceLine` and `formatStatusBadge` from `@/lib/format`. |
+| `dashboard/templates/18_Tile_Price_Status/README.md` | new | template-specific notes (layout 3×3×2 pages, frame names, static frames, quirks). |
+
+### Architecture notes
+
+The bridge code in `render-script.mjs` no longer knows about specific
+fields — it just iterates a per-tile array and dispatches on type.
+This is the foundation that lets the remaining two templates
+(`TeamBrochure_Airport.indd`, `TeamBrochure_NWPhoenix.indd`, both
+field-identical to `18_Tile_Price_Status` per the user) integrate
+with **just a manifest folder** and zero code changes.
+
+The `resolveTileFieldValue()` switch in `route.ts` is the registry of
+known field names. Adding a new field beyond the current six
+(address/city_state/sf_ac/price/status/photo) means adding one case
+there. The price-line rule and status badge transform are isolated as
+pure functions in `dashboard/lib/format.ts`, easily updatable when
+Max reviews the v1 transform table.
+
+The 6_Tile_Defaults manifest declares only four tile_fields, so the
+generic loop touches only those four frames per tile when rendering
+that template — no spurious frame lookups. Backward compat preserved.
+
+Pending verification (Stage 7.2 verification gate).
