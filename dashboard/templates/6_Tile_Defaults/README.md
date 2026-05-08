@@ -1,8 +1,10 @@
-# Recently_Leased_IOS
+# 6_Tile_Defaults
 
-The first production template — six tiles in a 2-column × 3-row grid
-with two editable page-level text frames (title, tagline). Drives the
-"Recently Leased" sheet style.
+The first production template (originally shipped as
+`Recently_Leased_IOS`, renamed in Stage 7 for naming consistency
+across the multi-template set). Six tiles in a 2-column × 3-row grid
+with two editable page-level text frames (title, tagline). Drives
+the "Recently Leased" sheet style.
 
 ## Tile layout
 

@@ -52,7 +52,7 @@ Per-template mapping from comp data to the tile-field populate steps
 the bridge code will run. Currently a **documentation/contract file** —
 the runtime render code (`dashboard/lib/render-script.mjs` and
 `dashboard/app/api/render/route.ts`) is hardcoded to the field shape
-used by Recently_Leased_IOS. When a second template arrives that uses
+used by 6_Tile_Defaults. When a template arrives that uses
 different tile fields (e.g., `status`, `price`), the runtime will be
 refactored to consume this file, and the export shape here becomes the
 canonical declaration.
@@ -83,6 +83,6 @@ render this image at the top.
    import.
 
 If the new template uses the same four tile fields as
-Recently_Leased_IOS (address, city_state, sf_ac, photo), no code
+6_Tile_Defaults (address, city_state, sf_ac, photo), no code
 changes are needed. If it uses different fields, the runtime needs
 the refactor to consume `render-mapping.ts` first.

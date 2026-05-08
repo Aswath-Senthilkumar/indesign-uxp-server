@@ -84,7 +84,7 @@ export default function Picker({ comps }: PickerProps) {
         // sample template. The real flow at /build/* gets these from
         // the manifest + introspection.
         const payload = {
-            template_id: "recently-leased-ios",
+            template_id: "6-tile-defaults",
             tile_count: 6,
             comps: selectedComps,
         };

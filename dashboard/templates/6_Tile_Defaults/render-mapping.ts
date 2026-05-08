@@ -4,10 +4,9 @@
  * SCAFFOLD / contract file. The runtime render path
  * (dashboard/lib/render-script.mjs and dashboard/app/api/render/route.ts)
  * is currently hardcoded to this exact field set for the
- * Recently_Leased_IOS template. When a second template arrives that
- * uses different tile fields, the runtime will be refactored to import
- * each template's render-mapping at request time, and this file becomes
- * its canonical declaration.
+ * 6_Tile_Defaults template (originally shipped as Recently_Leased_IOS,
+ * renamed in Stage 7). The Stage 7 manifest-driven render refactor is
+ * what consumes this scaffold for templates with different field sets.
  *
  * Imports:
  *   - `Comp` and `formatSfAc` come from `@/lib/format` so the SF/AC

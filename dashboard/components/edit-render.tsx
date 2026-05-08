@@ -61,7 +61,7 @@ interface RenderApiError {
 
 // Tile-grid column class. When the template's manifest declares
 // `grid.cols`, we use that as the desktop count so the dashboard mirrors
-// the actual InDesign layout (e.g. the Recently Leased IOS sheet is
+// the actual InDesign layout (e.g. the 6_Tile_Defaults sheet is
 // 2 cols × 3 rows in the .indd, so the drag grid should match). Without
 // the manifest hint, fall back to a count-based heuristic.
 //

@@ -1,8 +1,8 @@
 {
     "$schema_note": "Per-template manifest. The dashboard scans dashboard/templates/<NAME>/manifest.json and aggregates all entries it finds. Add a new template by dropping a .indd into the repo-root templates/ directory and creating a sibling folder here with this shape.",
-    "id": "recently-leased-ios",
-    "label": "Recently Leased IOS",
-    "file": "templates/Recently_Leased_IOS.indd",
+    "id": "6-tile-defaults",
+    "label": "6 Tiles template with defaults",
+    "file": "templates/6_Tile_Defaults.indd",
     "grid": {
         "cols": 2
     },
