@@ -88,3 +88,31 @@ template only one of the two `page_title` instances would update. The
 Stage 7.2 manifest-driven refactor will iterate `doc.textFrames` and
 apply the override to **every** matching frame by name, which works
 generically for any multi-page template.
+
+### Frame verification probe
+
+Sent against the bridge `/execute` endpoint with the new 18-tile
+template as the active document. Probe iterates 18 tiles × 6 fields
+(`tile_N_address`, `tile_N_city_state`, `tile_N_sf_ac`, `tile_N_price`,
+`tile_N_status` as text frames; `tile_N_photo` as a rectangle), counts
+the page-level frame instances, and lists any that fail `isValid`.
+
+Iteration uses `everyItem().getElements()` to convert the
+InDesign collection into a plain array (a first-pass probe with
+`collection[i]` indexing failed at runtime — the `.everyItem()`
+pattern is the safer one for UXP).
+
+**First run:**
+
+| | |
+|---|---|
+| Document | `18_Tile_Price_Status.indd` |
+| Pages | 2 |
+| `page_title` instances | 2 |
+| `page_tagline` instances | 2 |
+| Missing | `tile_2_city_state` |
+
+User fixed the typo on `tile_2_city_state`.
+
+**Second run:** all 108 expected frames (18×6 per-tile + 4 page-level)
+resolved as valid. Cleared to proceed to 7.1.
