@@ -116,3 +116,116 @@ User fixed the typo on `tile_2_city_state`.
 
 **Second run:** all 108 expected frames (18×6 per-tile + 4 page-level)
 resolved as valid. Cleared to proceed to 7.1.
+
+---
+
+## Stage 7.1 — Price-line rule
+
+### Investigation
+
+Queried Supabase against the live `comps` table to ground the rule in
+real data shape, then cross-referenced page 1 of Hannah's existing
+9-tile sample sheet (provided by the user as a screenshot).
+
+#### Disclosure rates (281 internal-deal rows)
+
+`sale_price` populated by status:
+
+| Status | Total | With `sale_price` | Coverage |
+|---|---|---|---|
+| SOLD | 174 | 170 | 98% |
+| FOR SALE | 27 | 27 | 100% |
+| FOR SALE/LEASE | 8 | 7 | 88% |
+| PENDING | 5 | 4 | 80% |
+| LEASED | 35 | 0 | 0% |
+| FOR LEASE | 28 | 0 | 0% |
+| (null status) | 4 | 0 | 0% |
+
+Lease-rate coverage on LEASED rows: 25/35 have `rent_psf`, **34/35
+have `base_rent_total`** — `base_rent_total` is the broader column.
+
+#### `base_rent_total` is monthly, not annual
+
+Confirmed by cross-referencing one row from the screenshot:
+
+- DB row: `411 S 33rd Avenue` LEASED, `base_rent_total = 32,375`,
+  `lease_format = NNN`.
+- Sheet shows `$32,000/MO NNN`.
+
+`32,375 ≈ 32,000` only if the column is already monthly dollars.
+That settles it; we do **not** divide by 12 in the formatter.
+
+#### Sheet ↔ DB mismatches (important caveat)
+
+The screenshot's tiles don't always cleanly map to a single DB row:
+
+- `411 S 33rd Ave` — sheet shows `SOLD & FOR LEASE` /
+  `$3,750,000 | $32,000/MO NNN`. DB has THREE separate rows for that
+  address (SOLD $3.75M, LEASED with `base_rent_total=32,375`,
+  FOR LEASE). The sheet merges them.
+- `1313 N 25th Ave` — sheet shows `$6,500,000 | $55,000/MO NNN`. DB
+  has a SOLD row at $6.5M plus a FOR LEASE row with **no disclosed
+  rate**. The `$55,000/MO` figure is not in the DB.
+- `234 E Mohave St` — sheet shows lease-only `$60,000 PER MONTH NNN`.
+  DB only has a SOLD row at $5,025,000 with no lease data. The lease
+  number is hand-typed, not from the DB.
+- Three other tiles have small price/status discrepancies between
+  sheet and DB (1441 N 27th, 30 N 56th, 1702 S 19th).
+
+**Conclusion:** Hannah's existing sheets are hand-curated. The
+dashboard's auto-render will produce results that match the DB
+exactly, which by definition won't always match a sheet that's been
+hand-edited or sourced externally. **One comp = one DB row** for v1.
+Cross-row merging by address (and any per-tile manual override
+workflow) is a real future feature; out of scope for Stage 7. User
+acknowledged this gap.
+
+### Price-line rule (`price_line_v1`)
+
+Implemented as a pure function `formatPriceLine(comp)` in
+`dashboard/lib/format.ts`. Evaluation order:
+
+1. Both `sale_price` and `base_rent_total` populated →
+   `$X,XXX,XXX | $X,XXX/MO [lease_format]`
+   (e.g. `$3,750,000 | $32,000/MO NNN`)
+2. Only `sale_price` populated →
+   `$X,XXX,XXX` (e.g. `$4,650,000`)
+3. Only `base_rent_total` populated →
+   `$X,XXX/MO [lease_format]` (e.g. `$32,000/MO NNN`)
+4. Neither →
+   `Contact Broker`
+
+Where `[lease_format]` is the row's `lease_format` value when
+non-null, or omitted entirely when null.
+
+`rent_psf` is **not used** by `formatPriceLine` — Hannah's sheets
+quote monthly, not per-SF. `rent_psf` stays projected for any future
+use but doesn't drive the v1 price line.
+
+### Status badge transform (pending Max review)
+
+Status frame text is the DB `status` value with a small transform
+table. **The two transforms below were inferred from a single page
+of one of Hannah's sample sheets — Max needs to confirm the
+intended mapping for production.**
+
+| DB `status` | Display | Inferred / verified? |
+|---|---|---|
+| `SOLD` | `SOLD` | verified (matches sample) |
+| `FOR SALE` | `FOR SALE` | verified |
+| `LEASED` | `LEASED` | not seen on the sample page; assumed identity |
+| `FOR LEASE` | `FOR LEASE` | not seen alone on the sample page; assumed identity |
+| `PENDING` | `PENDING SALE` | **inferred** — sample shows `PENDING SALE` badge but DB only has `PENDING`; need Max's confirmation |
+| `FOR SALE/LEASE` | `SOLD & FOR LEASE` | **inferred** — sample tiles with this badge correspond to addresses that have multiple DB rows (one SOLD, one lease record) rather than the single-value `FOR SALE/LEASE` status. Max may want a different transform, or may want this to remain `FOR SALE/LEASE`. |
+| NULL | (empty / no badge) | not seen; default to empty |
+
+User decision on 2026-05-07: ship the inferred mapping for v1 and
+flag for Max. Putting it in code lets a real render happen; the
+mapping is one constant table, easily updated when Max responds.
+
+### One screenshot artifact
+
+The sample sheet's tile 6 (`1702 S 19th Ave`) shows a status badge
+reading `F F F F F F F F` — almost certainly an authoring
+placeholder Hannah forgot to populate, not a real data convention.
+The DB row is plain `SOLD`. Ignored for rule design.
