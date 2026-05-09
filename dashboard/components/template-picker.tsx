@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useBuildState } from "@/lib/build-state";
 import type { TemplateManifestEntry } from "@/lib/manifest";
@@ -175,7 +175,6 @@ export default function TemplatePicker({ templates }: TemplatePickerProps) {
 
                                 <div className="mt-1 flex items-center gap-2">
                                     <Button
-                                        size="sm"
                                         variant={isSelected ? "secondary" : "default"}
                                         onClick={() => setSelectedId(tpl.id)}
                                     >
@@ -185,7 +184,7 @@ export default function TemplatePicker({ templates }: TemplatePickerProps) {
                                         href={`/api/templates/${encodeURIComponent(tpl.id)}/preview`}
                                         target="_blank"
                                         rel="noopener noreferrer"
-                                        className="inline-flex h-9 items-center rounded-md border px-3 text-sm font-medium hover:bg-muted"
+                                        className={buttonVariants({ variant: "outline" })}
                                     >
                                         Preview
                                     </a>
