@@ -1,9 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
@@ -15,7 +15,12 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { useBuildState } from "@/lib/build-state";
-import { type Comp, formatSfAc } from "@/lib/format";
+import {
+    type Comp,
+    formatPriceLine,
+    formatSfAc,
+    formatStatusBadge,
+} from "@/lib/format";
 
 interface CompsPickerProps {
     comps: Comp[];
@@ -46,6 +51,13 @@ const SORT_OPTIONS: Array<{ key: SortKey; label: string }> = [
     { key: "sale_price", label: "Sale price (highest)" },
     { key: "building_sf", label: "Building SF (largest)" },
 ];
+
+// Available-comps grid is 2 cols × 10 rows = 20 per page. Tried 3
+// cols briefly but card content (address + city/state · ±SF | ±AC)
+// was getting truncated; 2 cols keeps each card's text readable.
+// Filter and sort changes reset the user back to page 1 since the
+// previous offset rarely makes sense in a re-shaped result set.
+const PAGE_SIZE = 20;
 
 function dateRangeMs(r: DateRangeKey): number | null {
     switch (r) {
@@ -108,6 +120,14 @@ export default function CompsPicker({ comps }: CompsPickerProps) {
     const [statuses, setStatuses] = useState<Set<string>>(new Set());
     const [dateRange, setDateRange] = useState<DateRangeKey>("all");
     const [sortBy, setSortBy] = useState<SortKey>("sale_date");
+    const [page, setPage] = useState(0);
+
+    // Whenever the filter/sort state changes, snap back to page 1 so
+    // the user sees the top of the new result set instead of an
+    // ambient offset that may now be empty.
+    useEffect(() => {
+        setPage(0);
+    }, [query, submarket, statuses, dateRange, sortBy]);
 
     // Hooks-order rule: compute everything unconditionally before the
     // template-recovery early return.
@@ -161,6 +181,23 @@ export default function CompsPicker({ comps }: CompsPickerProps) {
         [selected]
     );
 
+    // Mirror the per-template field surfacing from the edit-stage tile
+    // cards: a comp's price line and status badge only appear on the
+    // picker card when the selected template declares those fields.
+    // Same formatters (`formatPriceLine`, `formatStatusBadge`) so the
+    // picker and edit pages stay character-identical.
+    const showStatus = template?.tileFieldNames?.includes("status") ?? false;
+    const showPrice = template?.tileFieldNames?.includes("price") ?? false;
+
+    const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+    // Clamp page in case the active filters shrank the result set
+    // below the previous page index. (Reset-on-filter-change covers the
+    // common case; this guards the edge where state updates race.)
+    const safePage = Math.min(page, totalPages - 1);
+    const pageStart = safePage * PAGE_SIZE;
+    const pageEnd = Math.min(pageStart + PAGE_SIZE, filtered.length);
+    const pageItems = filtered.slice(pageStart, pageEnd);
+
     const hasActiveFilters =
         query.length > 0 ||
         submarket !== ALL ||
@@ -177,7 +214,7 @@ export default function CompsPicker({ comps }: CompsPickerProps) {
                 </p>
                 <Link
                     href="/build/template"
-                    className="inline-flex h-9 items-center rounded-md bg-foreground px-4 text-sm font-medium text-background hover:bg-foreground/90"
+                    className={buttonVariants({ size: "lg" })}
                 >
                     Go to template selection
                 </Link>
@@ -267,7 +304,15 @@ export default function CompsPicker({ comps }: CompsPickerProps) {
                             }}
                         >
                             <SelectTrigger size="sm" className="min-w-[180px]">
-                                <SelectValue />
+                                <SelectValue>
+                                    {(v) =>
+                                        v === ALL || !v
+                                            ? "All submarkets"
+                                            : v === NULL_KEY
+                                                ? NULL_LABEL
+                                                : (v as string)
+                                    }
+                                </SelectValue>
                             </SelectTrigger>
                             <SelectContent>
                                 <SelectItem value={ALL}>All submarkets</SelectItem>
@@ -289,7 +334,12 @@ export default function CompsPicker({ comps }: CompsPickerProps) {
                             }}
                         >
                             <SelectTrigger size="sm" className="min-w-[150px]">
-                                <SelectValue />
+                                <SelectValue>
+                                    {(v) =>
+                                        DATE_RANGE_OPTIONS.find((o) => o.key === v)
+                                            ?.label ?? "All time"
+                                    }
+                                </SelectValue>
                             </SelectTrigger>
                             <SelectContent>
                                 {DATE_RANGE_OPTIONS.map((opt) => (
@@ -310,7 +360,12 @@ export default function CompsPicker({ comps }: CompsPickerProps) {
                             }}
                         >
                             <SelectTrigger size="sm" className="min-w-[180px]">
-                                <SelectValue />
+                                <SelectValue>
+                                    {(v) =>
+                                        SORT_OPTIONS.find((o) => o.key === v)?.label ??
+                                        "Sale date (newest)"
+                                    }
+                                </SelectValue>
                             </SelectTrigger>
                             <SelectContent>
                                 {SORT_OPTIONS.map((opt) => (
@@ -326,14 +381,18 @@ export default function CompsPicker({ comps }: CompsPickerProps) {
                         <button
                             type="button"
                             onClick={clearFilters}
-                            className="text-xs underline text-muted-foreground hover:text-foreground"
+                            className="text-xs underline text-muted-foreground hover:text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 rounded"
                         >
                             Clear filters
                         </button>
                     ) : null}
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2">
+                <div
+                    role="group"
+                    aria-label="Filter by status"
+                    className="flex flex-wrap items-center gap-2"
+                >
                     <span className="text-xs font-medium text-foreground/80">Status</span>
                     {statusOptions.map((opt) => {
                         const active = statuses.has(opt);
@@ -343,7 +402,7 @@ export default function CompsPicker({ comps }: CompsPickerProps) {
                                 type="button"
                                 onClick={() => toggleStatus(opt)}
                                 aria-pressed={active}
-                                className={`rounded-md border px-2 py-0.5 text-xs font-medium transition-colors ${
+                                className={`rounded-md border px-2 py-0.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 ${
                                     active
                                         ? "border-foreground bg-foreground text-background"
                                         : "border-border bg-transparent text-foreground/80 hover:bg-muted"
@@ -356,16 +415,22 @@ export default function CompsPicker({ comps }: CompsPickerProps) {
                 </div>
 
                 <p className="text-sm text-muted-foreground tabular-nums">
-                    {filtered.length} of {comps.length} shown
+                    {filtered.length === 0
+                        ? `0 of ${comps.length} shown`
+                        : `Showing ${pageStart + 1}–${pageEnd} of ${filtered.length}${
+                              filtered.length !== comps.length
+                                  ? ` (filtered from ${comps.length})`
+                                  : ""
+                          }`}
                 </p>
 
-                <ul className="grid gap-2">
+                <ul className="grid gap-3 md:grid-cols-2">
                     {filtered.length === 0 ? (
-                        <li className="text-sm text-muted-foreground">
+                        <li className="text-sm text-muted-foreground md:col-span-2">
                             No comps match the current filters.
                         </li>
                     ) : (
-                        filtered.map((c) => {
+                        pageItems.map((c) => {
                             const isSelected = selectedSet.has(c.id);
                             const atCap =
                                 !isSelected && selected.length >= targetCount;
@@ -380,22 +445,31 @@ export default function CompsPicker({ comps }: CompsPickerProps) {
                                                     : "hover:bg-muted/30"
                                         }`}
                                     >
-                                        {c.image_url ? (
-                                            // eslint-disable-next-line @next/next/no-img-element
-                                            <img
-                                                src={c.image_url}
-                                                alt=""
-                                                loading="lazy"
-                                                width={60}
-                                                height={60}
-                                                className="h-[60px] w-[60px] rounded-md object-cover bg-muted shrink-0"
-                                            />
-                                        ) : (
-                                            <div
-                                                aria-label="No image"
-                                                className="h-[60px] w-[60px] shrink-0 rounded-md bg-muted"
-                                            />
-                                        )}
+                                        {/*
+                                          Image is wrapped so the Card's
+                                          `has-[>img:first-child]:pt-0` rule
+                                          (intended for hero/image-top cards)
+                                          doesn't collapse the top padding
+                                          on this row layout.
+                                        */}
+                                        <div className="shrink-0">
+                                            {c.image_url ? (
+                                                // eslint-disable-next-line @next/next/no-img-element
+                                                <img
+                                                    src={c.image_url}
+                                                    alt=""
+                                                    loading="lazy"
+                                                    width={60}
+                                                    height={60}
+                                                    className="h-[60px] w-[60px] rounded-md object-cover bg-muted block"
+                                                />
+                                            ) : (
+                                                <div
+                                                    aria-label="No image"
+                                                    className="h-[60px] w-[60px] rounded-md bg-muted"
+                                                />
+                                            )}
+                                        </div>
                                         <div className="min-w-0 flex-1">
                                             <p className="truncate text-sm font-medium">
                                                 {c.address}
@@ -403,6 +477,24 @@ export default function CompsPicker({ comps }: CompsPickerProps) {
                                             <p className="truncate text-xs text-muted-foreground">
                                                 {c.city}, {c.state} · {formatSfAc(c.building_sf, c.land_area)}
                                             </p>
+                                            {showStatus || showPrice ? (
+                                                <div className="mt-1 flex items-center gap-1.5 min-w-0">
+                                                    {showStatus ? (
+                                                        <span className="shrink-0 rounded-md border border-border bg-muted px-1.5 py-0 text-[10px] font-medium uppercase tracking-wide text-foreground/70">
+                                                            {formatStatusBadge(c.status) || "—"}
+                                                        </span>
+                                                    ) : null}
+                                                    {showPrice ? (
+                                                        <span className="truncate text-xs text-muted-foreground">
+                                                            {formatPriceLine({
+                                                                sale_price: c.sale_price,
+                                                                base_rent_total: c.base_rent_total,
+                                                                lease_format: c.lease_format,
+                                                            })}
+                                                        </span>
+                                                    ) : null}
+                                                </div>
+                                            ) : null}
                                         </div>
                                         <Button
                                             size="sm"
@@ -418,6 +510,39 @@ export default function CompsPicker({ comps }: CompsPickerProps) {
                         })
                     )}
                 </ul>
+
+                {totalPages > 1 ? (
+                    <div className="flex items-center justify-between gap-3 pt-1">
+                        <p
+                            className="text-xs text-muted-foreground tabular-nums"
+                            aria-live="polite"
+                        >
+                            Page {safePage + 1} of {totalPages}
+                        </p>
+                        <div className="flex items-center gap-2">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={safePage === 0}
+                                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                                aria-label="Previous page"
+                            >
+                                Previous
+                            </Button>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={safePage >= totalPages - 1}
+                                onClick={() =>
+                                    setPage((p) => Math.min(totalPages - 1, p + 1))
+                                }
+                                aria-label="Next page"
+                            >
+                                Next
+                            </Button>
+                        </div>
+                    </div>
+                ) : null}
             </section>
 
             <Separator />
