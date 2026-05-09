@@ -19,7 +19,7 @@ import {
     useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -131,10 +131,19 @@ function SortableTileCard({
     };
 
     return (
+        // The whole Card is the drag handle. The PointerSensor's
+        // `distance: 4` activation constraint means a click without
+        // movement still registers as a click (the X button works);
+        // a drag of >=4px starts the sortable. The X button additionally
+        // stops pointerdown propagation so dnd-kit never sees its
+        // pointer events at all — defensive, in case a user mousedowns
+        // and slightly moves on the X.
         <Card
             ref={setNodeRef}
             style={style}
-            className={`relative flex flex-col gap-2 p-3 ${
+            {...attributes}
+            {...listeners}
+            className={`relative flex flex-col gap-2 p-3 cursor-grab select-none active:cursor-grabbing ${
                 isDragging ? "shadow-lg ring-2 ring-foreground/20" : ""
             }`}
         >
@@ -146,7 +155,8 @@ function SortableTileCard({
                     type="button"
                     aria-label={`Remove ${comp.address}`}
                     onClick={() => onRemove(comp.id)}
-                    className="rounded p-1 text-foreground/50 hover:bg-muted hover:text-foreground"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    className="rounded p-1 text-foreground/50 hover:bg-muted hover:text-foreground cursor-pointer"
                 >
                     ×
                 </button>
@@ -162,16 +172,11 @@ function SortableTileCard({
                     alt=""
                     loading="lazy"
                     onError={() => setImgFailed(true)}
-                    className="h-24 w-full rounded-md object-cover bg-muted"
+                    draggable={false}
+                    className="h-24 w-full rounded-md object-cover bg-muted pointer-events-none"
                 />
             )}
-            {/* Drag handle: the body of the card is grabbable. The remove
-                button has its own click handler which short-circuits. */}
-            <div
-                {...attributes}
-                {...listeners}
-                className="cursor-grab select-none active:cursor-grabbing"
-            >
+            <div>
                 <div className="flex items-start justify-between gap-2">
                     <p className="truncate text-sm font-medium flex-1 min-w-0">
                         {comp.address}
@@ -411,7 +416,7 @@ export default function EditRender() {
                 </p>
                 <Link
                     href="/build/template"
-                    className="inline-flex h-9 items-center rounded-md bg-foreground px-4 text-sm font-medium text-background hover:bg-foreground/90"
+                    className={buttonVariants({ size: "lg" })}
                 >
                     Go to template selection
                 </Link>
@@ -427,7 +432,7 @@ export default function EditRender() {
                 </p>
                 <Link
                     href="/build/comps"
-                    className="inline-flex h-9 items-center rounded-md bg-foreground px-4 text-sm font-medium text-background hover:bg-foreground/90"
+                    className={buttonVariants({ size: "lg" })}
                 >
                     Go to comp selection
                 </Link>
