@@ -1,20 +1,23 @@
 /*
- * Template registry. The dashboard scans every "manifest.json" under
- * `dashboard/templates/<TemplateName>/` and aggregates each entry. To
- * add a new template:
+ * Template registry. The dashboard scans
+ *   `dashboard/templates/<workflow>/<TemplateName>/manifest.json`
+ * and aggregates each entry. Workflow is path-derived: the first
+ * directory level under `dashboard/templates/` IS the workflow id
+ * and must match one of the ids declared in `dashboard/lib/workflows.ts`.
  *
- *   1. Drop a .indd into the repo-root templates directory.
- *   2. Create a sibling folder under dashboard/templates/<TemplateName>/
+ * To add a new template:
+ *   1. Drop a .indd into the repo-root `templates/` directory.
+ *   2. Create a folder under `dashboard/templates/<workflow>/<TemplateName>/`
  *      and put a manifest.json in it with the shape:
  *        { id, label, file, tile_fields, page_fields, static_frames_note? }
+ *      where `id` is unique across ALL workflows and `file` is the .indd
+ *      path relative to the repo root (NOT relative to the per-template dir).
  *
  * No code changes required. The new entry is discovered at module load
- * (cached for the dashboard process lifetime) and shows up on the
- * picker.
+ * (cached for the dashboard process lifetime) and shows up on the picker
+ * once the user picks the corresponding workflow.
  *
- * `id` is the URL/state key, must be unique. `file` is the .indd path
- * relative to the repo root (NOT relative to the per-template dir).
- * tile_count is NOT recorded here — resolved at runtime by
+ * tile_count is NOT recorded in the manifest — resolved at runtime by
  * dashboard/lib/template-introspect.ts via the bridge.
  *
  * Template entries with parse errors are skipped with a server-side
@@ -23,6 +26,7 @@
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { WORKFLOWS, type WorkflowId, isWorkflowId } from "./workflows";
 
 const TEMPLATES_DIR = path.resolve(process.cwd(), "templates");
 
@@ -61,11 +65,27 @@ export interface TemplateManifestEntry {
     page_fields: PageField[];
     grid?: GridHint;
     static_frames_note?: string;
+    /**
+     * Path-derived workflow id (the parent folder name under
+     * `dashboard/templates/`). Not stored in the manifest.json itself —
+     * the scanner fills this in from the directory layout.
+     */
+    workflow: WorkflowId;
+}
+
+interface RawTemplateEntry {
+    id: string;
+    label: string;
+    file: string;
+    tile_fields: TileField[];
+    page_fields: PageField[];
+    grid?: GridHint;
+    static_frames_note?: string;
 }
 
 let cache: TemplateManifestEntry[] | null = null;
 
-function isTemplateEntry(v: unknown): v is TemplateManifestEntry {
+function isRawTemplateEntry(v: unknown): v is RawTemplateEntry {
     if (typeof v !== "object" || v === null) return false;
     const o = v as Record<string, unknown>;
     return (
@@ -77,12 +97,17 @@ function isTemplateEntry(v: unknown): v is TemplateManifestEntry {
     );
 }
 
+async function listDirs(dir: string): Promise<string[]> {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    return entries.filter((d) => d.isDirectory()).map((d) => d.name).sort();
+}
+
 export async function loadManifest(): Promise<TemplateManifestEntry[]> {
     if (cache) return cache;
 
-    let dirEntries: { name: string; isDirectory: () => boolean }[];
+    let workflowDirs: string[];
     try {
-        dirEntries = await fs.readdir(TEMPLATES_DIR, { withFileTypes: true });
+        workflowDirs = await listDirs(TEMPLATES_DIR);
     } catch (e) {
         const err = e as NodeJS.ErrnoException;
         if (err.code === "ENOENT") {
@@ -95,54 +120,75 @@ export async function loadManifest(): Promise<TemplateManifestEntry[]> {
         throw e;
     }
 
-    const folders = dirEntries
-        .filter((d) => d.isDirectory())
-        .map((d) => d.name)
-        .sort();
-
     const entries: TemplateManifestEntry[] = [];
     const seenIds = new Set<string>();
-    for (const folder of folders) {
-        const manifestPath = path.join(TEMPLATES_DIR, folder, "manifest.json");
-        let raw: string;
+
+    for (const workflowFolder of workflowDirs) {
+        if (!isWorkflowId(workflowFolder)) {
+            console.warn(
+                `[manifest] dashboard/templates/${workflowFolder} is not a recognized workflow id (known: ${Object.keys(WORKFLOWS).join(", ")}) — skipping its contents`
+            );
+            continue;
+        }
+        const workflow: WorkflowId = workflowFolder;
+        const workflowDirPath = path.join(TEMPLATES_DIR, workflowFolder);
+
+        let templateFolders: string[];
         try {
-            raw = await fs.readFile(manifestPath, "utf8");
+            templateFolders = await listDirs(workflowDirPath);
         } catch (e) {
-            const err = e as NodeJS.ErrnoException;
-            if (err.code === "ENOENT") {
+            console.warn(
+                `[manifest] couldn't read dashboard/templates/${workflowFolder}/: ${(e as Error).message}`
+            );
+            continue;
+        }
+
+        for (const tplFolder of templateFolders) {
+            const manifestPath = path.join(
+                workflowDirPath,
+                tplFolder,
+                "manifest.json"
+            );
+            let raw: string;
+            try {
+                raw = await fs.readFile(manifestPath, "utf8");
+            } catch (e) {
+                const err = e as NodeJS.ErrnoException;
+                if (err.code === "ENOENT") {
+                    console.warn(
+                        `[manifest] no manifest.json in dashboard/templates/${workflowFolder}/${tplFolder} — skipping`
+                    );
+                    continue;
+                }
+                throw e;
+            }
+
+            let parsed: unknown;
+            try {
+                parsed = JSON.parse(raw);
+            } catch (e) {
                 console.warn(
-                    `[manifest] no manifest.json in dashboard/templates/${folder} — skipping`
+                    `[manifest] dashboard/templates/${workflowFolder}/${tplFolder}/manifest.json is not valid JSON — skipping (${(e as Error).message})`
                 );
                 continue;
             }
-            throw e;
-        }
 
-        let parsed: unknown;
-        try {
-            parsed = JSON.parse(raw);
-        } catch (e) {
-            console.warn(
-                `[manifest] dashboard/templates/${folder}/manifest.json is not valid JSON — skipping (${(e as Error).message})`
-            );
-            continue;
-        }
+            if (!isRawTemplateEntry(parsed)) {
+                console.warn(
+                    `[manifest] dashboard/templates/${workflowFolder}/${tplFolder}/manifest.json is missing required fields — skipping`
+                );
+                continue;
+            }
 
-        if (!isTemplateEntry(parsed)) {
-            console.warn(
-                `[manifest] dashboard/templates/${folder}/manifest.json is missing required fields — skipping`
-            );
-            continue;
+            if (seenIds.has(parsed.id)) {
+                console.warn(
+                    `[manifest] dashboard/templates/${workflowFolder}/${tplFolder} declares id="${parsed.id}" which was already registered — skipping duplicate`
+                );
+                continue;
+            }
+            seenIds.add(parsed.id);
+            entries.push({ ...parsed, workflow });
         }
-
-        if (seenIds.has(parsed.id)) {
-            console.warn(
-                `[manifest] dashboard/templates/${folder} declares id="${parsed.id}" which was already registered — skipping duplicate`
-            );
-            continue;
-        }
-        seenIds.add(parsed.id);
-        entries.push(parsed);
     }
 
     cache = entries;
@@ -154,6 +200,13 @@ export async function getTemplate(
 ): Promise<TemplateManifestEntry | null> {
     const all = await loadManifest();
     return all.find((t) => t.id === id) ?? null;
+}
+
+export async function getTemplatesForWorkflow(
+    workflow: WorkflowId
+): Promise<TemplateManifestEntry[]> {
+    const all = await loadManifest();
+    return all.filter((t) => t.workflow === workflow);
 }
 
 export function clearManifestCache(): void {

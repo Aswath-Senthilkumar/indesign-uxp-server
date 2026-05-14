@@ -1,18 +1,31 @@
 # Per-template setup
 
-Each template the dashboard supports lives in a folder named after its
-`.indd` file (without extension). The dashboard's manifest scanner
-(`dashboard/lib/manifest.ts`) walks this directory at module load and
-aggregates every entry it finds.
+Templates are organized **by workflow**. The dashboard's manifest scanner
+([dashboard/lib/manifest.ts](../lib/manifest.ts)) walks one level into
+`dashboard/templates/`, treats each first-level folder as a workflow id,
+and aggregates every per-template `manifest.json` it finds inside.
 
 ```
 dashboard/templates/
-└── <TemplateName>/
-    ├── manifest.json          ← required
-    ├── render-mapping.ts      ← optional (see below)
-    ├── README.md              ← optional
-    └── preview.png            ← optional (not yet wired)
+├── team-sheets/
+│   ├── 6_Tile_Defaults/
+│   │   ├── manifest.json          ← required
+│   │   ├── render-mapping.ts      ← optional (see below)
+│   │   ├── README.md              ← optional
+│   │   └── preview.png            ← optional (not yet wired)
+│   └── 18_Tile_Price_Status/
+│       └── …
+└── bov/
+    └── (empty until a BOV template lands)
 ```
+
+**Workflow ids are path-derived.** The first-level folder name must match
+a workflow id declared in [dashboard/lib/workflows.ts](../lib/workflows.ts)
+(`team-sheets`, `bov`, …). Folders that don't match a known workflow id
+are skipped with a console warning.
+
+The Stage-8 workflow selection stage (`/build/workflow`) filters the
+template picker's list to those declared for the selected workflow.
 
 ## File catalogue
 
@@ -38,28 +51,28 @@ layout, page-field inputs, and the render API's frame mapping.
 }
 ```
 
+- `id` must be unique **across all workflows**.
+- `file` is the .indd path relative to the **repo root** (e.g.
+  `templates/6_Tile_Defaults.indd`), not relative to the per-template dir.
+- `workflow` is NOT a field on the manifest — it's derived from the
+  parent folder.
 - `grid.cols` (optional) — desktop column count of the drag-grid on
   `/build/edit`. Falls back to a count-based heuristic when absent.
-- `tile_fields[].format` (optional) — informational today. Will drive
-  the manifest-driven render path once a second template motivates
-  the refactor.
+- `tile_fields[].format` (optional) — informational today; the
+  runtime dispatches by `field` name.
 - Don't enumerate static frames in the manifest. They're not surfaced
   in the dashboard; the `static_frames_note` is for humans only.
 
 ### `render-mapping.ts` — optional (scaffold)
 
-Per-template mapping from comp data to the tile-field populate steps
-the bridge code will run. Currently a **documentation/contract file** —
-the runtime render code (`dashboard/lib/render-script.mjs` and
-`dashboard/app/api/render/route.ts`) is hardcoded to the field shape
-used by 6_Tile_Defaults. When a template arrives that uses
-different tile fields (e.g., `status`, `price`), the runtime will be
-refactored to consume this file, and the export shape here becomes the
-canonical declaration.
-
-Until then, this file is present for templates that want to ship the
-canonical shape early so the second template's PR is mostly "drop the
-folder and test."
+Per-template canonical declaration of how a `Comp` record maps to the
+tile-field values the bridge writes into named frames. The runtime
+([dashboard/lib/render-script.mjs](../lib/render-script.mjs),
+[dashboard/app/api/render/route.ts](../app/api/render/route.ts)) is
+manifest-driven and dispatches by `field` name, so adding a new
+field-set means adding a case in `resolveTileFieldValue()` in
+`route.ts`. The mapping file is the contract that documents which
+field names a template expects.
 
 ### `README.md` — optional
 
@@ -76,13 +89,26 @@ render this image at the top.
 ## Adding a new template
 
 1. Drop the `.indd` into `templates/` (repo root).
-2. Create `dashboard/templates/<TemplateName>/`.
-3. Add `manifest.json` with the required fields.
-4. (Optional) add `README.md`, `render-mapping.ts`, `preview.png`.
-5. Restart the dev server — the manifest cache reloads on next module
+2. Identify the workflow it belongs to (`team-sheets`, `bov`, …).
+3. Create `dashboard/templates/<workflow>/<TemplateName>/`.
+4. Add `manifest.json` with the required fields.
+5. (Optional) add `README.md`, `render-mapping.ts`, `preview.png`.
+6. Restart the dev server — the manifest cache reloads on next module
    import.
 
-If the new template uses the same four tile fields as
-6_Tile_Defaults (address, city_state, sf_ac, photo), no code
-changes are needed. If it uses different fields, the runtime needs
-the refactor to consume `render-mapping.ts` first.
+If the new template uses tile fields the runtime already knows
+(address, city_state, sf_ac, photo, price, status), no code changes
+are needed. If it introduces a new field name, add a case in
+`resolveTileFieldValue()` in [route.ts](../app/api/render/route.ts).
+
+## Adding a new workflow
+
+1. Add the workflow id + metadata to
+   [dashboard/lib/workflows.ts](../lib/workflows.ts).
+2. Create the matching folder under `dashboard/templates/<workflow-id>/`.
+3. Drop templates into it.
+4. Restart the dev server.
+
+The workflow picker reads `WORKFLOWS` directly — the new entry will
+surface on `/build/workflow` automatically (gated by its `available`
+flag).

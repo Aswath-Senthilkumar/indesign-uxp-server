@@ -1,8 +1,8 @@
 import { redirect } from "next/navigation";
 
-// Stage 5 entry point. The new flow lives under /build/*. The Stage 4
-// flat picker stays reachable at /legacy for reference during Stage 5
-// development.
+// Entry point. The build flow now lives at /build/workflow ->
+// /build/template -> /build/comps -> /build/edit. The Stage 4 flat
+// picker stays reachable at /legacy.
 export default function Home() {
-    redirect("/build/template");
+    redirect("/build/workflow");
 }

@@ -1,12 +1,17 @@
 "use client";
 
 /**
- * Client-side state for the three-stage build flow.
+ * Client-side state for the four-stage build flow:
+ *   Workflow -> Template -> Comps -> Edit
  *
  * State persists across navigations within /build/* because the build
  * layout doesn't unmount when the user moves between routes — the
  * provider lives at the layout level. A page refresh resets state to
  * the empty value (refresh-resets-state limitation accepted for v1).
+ *
+ * Cascade rule: changing workflow wipes template/comps/overrides.
+ * Changing template wipes comps/overrides. Same downstream-reset
+ * pattern at each level.
  */
 
 import {
@@ -18,6 +23,7 @@ import {
     type ReactNode,
 } from "react";
 import type { Comp } from "@/lib/format";
+import type { WorkflowId } from "@/lib/workflows";
 
 export interface SelectedTemplate {
     id: string;
@@ -41,12 +47,14 @@ export interface SelectedTemplate {
 }
 
 export interface BuildState {
+    workflow: WorkflowId | null;
     template: SelectedTemplate | null;
     comps: Comp[];
     pageOverrides: Record<string, string>;
 }
 
 interface BuildStateContextValue extends BuildState {
+    setWorkflow(w: WorkflowId | null): void;
     setTemplate(t: SelectedTemplate | null): void;
     setComps(comps: Comp[]): void;
     setPageOverride(field: string, value: string): void;
@@ -54,6 +62,7 @@ interface BuildStateContextValue extends BuildState {
 }
 
 const initialState: BuildState = {
+    workflow: null,
     template: null,
     comps: [],
     pageOverrides: {},
@@ -64,13 +73,28 @@ const BuildStateContext = createContext<BuildStateContextValue | null>(null);
 export function BuildStateProvider({ children }: { children: ReactNode }) {
     const [state, setState] = useState<BuildState>(initialState);
 
+    const setWorkflow = useCallback((w: WorkflowId | null) => {
+        setState((prev) => {
+            // Switching workflow wipes everything below it — the
+            // available template set is workflow-scoped. Selecting the
+            // same workflow again is a no-op.
+            if (prev.workflow === w) return prev;
+            return {
+                workflow: w,
+                template: null,
+                comps: [],
+                pageOverrides: {},
+            };
+        });
+    }, []);
+
     const setTemplate = useCallback((t: SelectedTemplate | null) => {
         setState((prev) => {
             // Switching templates wipes downstream state — different
             // templates have different tile counts and different page
             // fields. Selecting the same template again is a no-op.
             if (prev.template?.id === t?.id) return prev;
-            return { template: t, comps: [], pageOverrides: {} };
+            return { ...prev, template: t, comps: [], pageOverrides: {} };
         });
     }, []);
 
@@ -90,12 +114,13 @@ export function BuildStateProvider({ children }: { children: ReactNode }) {
     const value = useMemo<BuildStateContextValue>(
         () => ({
             ...state,
+            setWorkflow,
             setTemplate,
             setComps,
             setPageOverride,
             reset,
         }),
-        [state, setTemplate, setComps, setPageOverride, reset]
+        [state, setWorkflow, setTemplate, setComps, setPageOverride, reset]
     );
 
     return (

@@ -1,11 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useBuildState } from "@/lib/build-state";
 import type { TemplateManifestEntry } from "@/lib/manifest";
+import { WORKFLOWS } from "@/lib/workflows";
 
 interface TemplatePickerProps {
     templates: TemplateManifestEntry[];
@@ -42,7 +44,7 @@ function fieldLabel(field: string): string {
 
 export default function TemplatePicker({ templates }: TemplatePickerProps) {
     const router = useRouter();
-    const { template: selectedFromState, setTemplate } = useBuildState();
+    const { workflow, template: selectedFromState, setTemplate } = useBuildState();
 
     const [selectedId, setSelectedId] = useState<string | null>(
         selectedFromState?.id ?? null
@@ -50,6 +52,17 @@ export default function TemplatePicker({ templates }: TemplatePickerProps) {
     const [continuing, setContinuing] = useState(false);
     const [error, setError] = useState<{ message: string; detail?: string } | null>(
         null
+    );
+
+    // Filter the global template list down to those declared for the
+    // selected workflow. Recovery state below catches the workflow-not-
+    // picked case before this is used.
+    const workflowTemplates = useMemo(
+        () =>
+            workflow === null
+                ? []
+                : templates.filter((t) => t.workflow === workflow),
+        [templates, workflow]
     );
 
     async function handleContinue() {
@@ -98,30 +111,65 @@ export default function TemplatePicker({ templates }: TemplatePickerProps) {
         }
     }
 
+    if (workflow === null) {
+        return (
+            <Card className="space-y-3 p-6">
+                <p className="text-sm">
+                    No workflow selected. The build flow starts at workflow
+                    selection.
+                </p>
+                <Link
+                    href="/build/workflow"
+                    className={buttonVariants({ size: "lg" })}
+                >
+                    Go to workflow selection
+                </Link>
+            </Card>
+        );
+    }
+
+    const workflowLabel = WORKFLOWS[workflow].label;
+
     return (
         <section className="space-y-6">
-            <header>
-                <h1 className="text-2xl font-semibold tracking-tight">
-                    Choose a template
-                </h1>
-                <p className="mt-2 text-sm text-muted-foreground">
-                    Each template has a fixed field set. Pick the one that fits
-                    the sheet you&apos;re building.
-                </p>
+            <header className="flex flex-wrap items-end justify-between gap-3">
+                <div className="min-w-0">
+                    <h1 className="truncate text-2xl font-semibold tracking-tight">
+                        Choose a template
+                    </h1>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                        Workflow:{" "}
+                        <span className="font-medium text-foreground">
+                            {workflowLabel}
+                        </span>
+                        {" · "}each template has a fixed field set; pick the one
+                        that fits the sheet you&apos;re building.
+                    </p>
+                </div>
+                <Link
+                    href="/build/workflow"
+                    className="text-sm underline text-muted-foreground hover:text-foreground"
+                >
+                    Change workflow
+                </Link>
             </header>
 
-            {templates.length === 0 ? (
+            {workflowTemplates.length === 0 ? (
                 <Card className="p-6 text-sm text-muted-foreground">
-                    No templates found under{" "}
+                    No templates declared for the{" "}
+                    <span className="font-medium text-foreground">
+                        {workflowLabel}
+                    </span>{" "}
+                    workflow yet. Add one under{" "}
                     <code className="rounded bg-muted px-1 py-0.5 text-xs">
-                        dashboard/templates/&lt;TemplateName&gt;/manifest.json
+                        dashboard/templates/{workflow}/&lt;TemplateName&gt;/manifest.json
                     </code>
                     .
                 </Card>
             ) : null}
 
             <ul className="grid gap-3 md:grid-cols-2">
-                {templates.map((tpl) => {
+                {workflowTemplates.map((tpl) => {
                     const isSelected = selectedId === tpl.id;
                     return (
                         <li key={tpl.id}>

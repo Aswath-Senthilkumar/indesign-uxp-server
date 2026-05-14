@@ -5,12 +5,13 @@ import { usePathname } from "next/navigation";
 import { useBuildState } from "@/lib/build-state";
 
 interface Step {
-    id: "template" | "comps" | "edit";
+    id: "workflow" | "template" | "comps" | "edit";
     label: string;
     href: string;
 }
 
 const STEPS: Step[] = [
+    { id: "workflow", label: "Workflow", href: "/build/workflow" },
     { id: "template", label: "Template", href: "/build/template" },
     { id: "comps", label: "Comps", href: "/build/comps" },
     { id: "edit", label: "Edit & Render", href: "/build/edit" },
@@ -18,12 +19,13 @@ const STEPS: Step[] = [
 
 export default function BuildStepper() {
     const pathname = usePathname();
-    const { template, comps } = useBuildState();
+    const { workflow, template, comps } = useBuildState();
 
     // Derive completion gates. A step is "complete" only when its
     // outputs are present in state, which is also the gate that lets
     // the user navigate forward via the stepper.
     const stepsComplete: Record<Step["id"], boolean> = {
+        workflow: workflow !== null,
         template: template !== null,
         comps:
             template !== null &&
