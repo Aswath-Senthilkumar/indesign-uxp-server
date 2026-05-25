@@ -38,7 +38,7 @@
 import { promises as fs, statSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildBridgeCode } from './dashboard/lib/render-script.mjs';
+import { buildBridgeCode } from './render-service/lib/render-script.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 

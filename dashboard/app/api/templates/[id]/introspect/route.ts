@@ -1,18 +1,15 @@
 /**
- * POST /api/templates/[id]/introspect
+ * POST /api/templates/[id]/introspect — Phase 1 thin proxy.
  *
- * Resolves runtime info (tile_count) for the given template id. Looks up
- * the template's file path in the manifest, then delegates to
- * dashboard/lib/template-introspect.ts which queries the bridge.
- *
- * Returns: `{ tileCount: number, sampleFrames?: string[] }` on success,
- * `{ error, ... }` on failure (404 unknown id, 502 bridge problem,
- * 500 misconfig).
+ * Forwards to the standalone render service at POST /introspect with
+ * the template_id moved into the JSON body. Response shape is
+ * unchanged from the client's perspective.
  */
 
-import { NextResponse, type NextRequest } from "next/server";
-import { getTemplate } from "@/lib/manifest";
-import { getTemplateIntrospection } from "@/lib/template-introspect";
+import { type NextRequest } from "next/server";
+
+const RENDER_SERVICE_URL =
+    process.env.RENDER_SERVICE_URL ?? "http://127.0.0.1:8765";
 
 export async function POST(
     _req: NextRequest,
@@ -20,36 +17,29 @@ export async function POST(
 ) {
     const { id } = await ctx.params;
 
-    const tpl = await getTemplate(id);
-    if (!tpl) {
-        return NextResponse.json(
-            { error: `unknown template id: ${id}` },
-            { status: 404 }
+    let upstream: Response;
+    try {
+        upstream = await fetch(`${RENDER_SERVICE_URL}/introspect`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ template_id: id }),
+            cache: "no-store",
+        });
+    } catch (e) {
+        return Response.json(
+            {
+                error: `render service unreachable at ${RENDER_SERVICE_URL}`,
+                hint: "start the render service: cd render-service && npm start",
+                detail: (e as Error).message,
+            },
+            { status: 503 }
         );
     }
 
-    try {
-        const result = await getTemplateIntrospection(tpl.id, tpl.file);
-        return NextResponse.json({
-            tileCount: result.tileCount,
-            templatePath: result.templatePath,
-            // Echo the manifest's grid hint so the client can drive its
-            // edit-stage layout without a second round-trip.
-            gridCols: tpl.grid?.cols,
-            // Stage 7.3: ship the tile-field list so the edit-stage tile
-            // cards know which fields the selected template uses (e.g.
-            // whether to render the status badge and price line).
-            tileFieldNames: tpl.tile_fields.map((f) => f.field),
-        });
-    } catch (e) {
-        const msg = (e as Error).message;
-        // Heuristic: bridge-related failures vs everything else.
-        const isBridge =
-            msg.startsWith("bridge unreachable") ||
-            msg.startsWith("bridge returned");
-        return NextResponse.json(
-            { error: "introspection failed", detail: msg },
-            { status: isBridge ? 502 : 500 }
-        );
-    }
+    const text = await upstream.text();
+    const ct = upstream.headers.get("content-type") ?? "application/json";
+    return new Response(text, {
+        status: upstream.status,
+        headers: { "Content-Type": ct },
+    });
 }

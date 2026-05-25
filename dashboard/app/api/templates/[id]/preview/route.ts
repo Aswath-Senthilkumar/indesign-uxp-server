@@ -1,54 +1,28 @@
 /**
- * GET /api/templates/[id]/preview
+ * GET /api/templates/[id]/preview — Phase 1 thin proxy.
  *
- * Renders the named template AS-IS (no tile data populated) and streams
- * the PDF back inline so the browser's PDF viewer handles display +
- * download. Used by the "Preview" button on each template card in the
- * picker.
- *
- * Same isolation model as `/api/render`: opens via `OpenOptions.openCopy`
- * so the original template file is never bound or modified.
+ * Forwards to GET ${RENDER_SERVICE_URL}/preview?template_id=<id> and
+ * streams the PDF response back, preserving Content-Type,
+ * Content-Disposition, and Cache-Control.
  */
 
-import { NextResponse, type NextRequest } from "next/server";
-import { promises as fs } from "node:fs";
-import path from "node:path";
-import { getTemplate } from "@/lib/manifest";
+import { type NextRequest } from "next/server";
 
-const BRIDGE_URL = "http://127.0.0.1:3000";
+const RENDER_SERVICE_URL =
+    process.env.RENDER_SERVICE_URL ?? "http://127.0.0.1:8765";
 
-const REPO_ROOT =
-    process.env.INDESIGN_REPO_ROOT ?? path.resolve(process.cwd(), "..");
-const OUTPUT_DIR = path.join(REPO_ROOT, "output");
-
-const lit = (s: string) => JSON.stringify(s);
-
-interface PreviewBridgeResult {
-    ok: boolean;
-    error?: string;
-}
-
-function buildPreviewCode(templatePath: string, outputPdf: string): string {
-    return `
-        const { ExportFormat, SaveOptions, UserInteractionLevels, OpenOptions } = require('indesign');
-        app.scriptPreferences.userInteractionLevel = UserInteractionLevels.neverInteract;
-
-        let doc;
-        let result;
-        try {
-            doc = await app.open(${lit(templatePath)}, true, OpenOptions.openCopy);
-            if (!doc) doc = app.activeDocument;
-            if (!doc) throw new Error('app.open returned no document');
-            await doc.exportFile(ExportFormat.pdfType, ${lit(outputPdf)}, false);
-            result = { ok: true };
-        } catch (e) {
-            result = { ok: false, error: e.message || String(e) };
+function copyResponseHeaders(src: Headers, dst: Headers): void {
+    src.forEach((value, key) => {
+        const k = key.toLowerCase();
+        if (
+            k === "content-length" ||
+            k === "transfer-encoding" ||
+            k === "connection"
+        ) {
+            return;
         }
-        if (doc) {
-            try { await doc.close(SaveOptions.no); } catch (e) { /* swallow */ }
-        }
-        return result;
-    `;
+        dst.set(key, value);
+    });
 }
 
 export async function GET(
@@ -57,115 +31,35 @@ export async function GET(
 ) {
     const { id } = await ctx.params;
 
-    const tpl = await getTemplate(id);
-    if (!tpl) {
-        return NextResponse.json(
-            { error: `unknown template id: ${id}` },
-            { status: 404 }
-        );
-    }
-
-    const templatePath = path.resolve(REPO_ROOT, tpl.file);
+    let upstream: Response;
     try {
-        await fs.access(templatePath);
-    } catch {
-        return NextResponse.json(
-            { error: "template file not found", expected: templatePath },
-            { status: 500 }
+        upstream = await fetch(
+            `${RENDER_SERVICE_URL}/preview?template_id=${encodeURIComponent(id)}`,
+            { cache: "no-store" }
         );
-    }
-
-    // Bridge connectivity check up front so we don't generate temp paths
-    // pointlessly.
-    try {
-        const r = await fetch(`${BRIDGE_URL}/status`, { cache: "no-store" });
-        if (!r.ok) throw new Error(`/status returned ${r.status}`);
-        const s = (await r.json()) as { connected?: boolean };
-        if (!s.connected) {
-            return NextResponse.json(
-                {
-                    error: "bridge says plugin not connected",
-                    hint: "open InDesign with the Bridge Panel loaded",
-                },
-                { status: 503 }
-            );
-        }
     } catch (e) {
-        return NextResponse.json(
+        return Response.json(
             {
-                error: "bridge unreachable on 127.0.0.1:3000",
-                hint: "start the bridge: cd bridge && node server.js",
+                error: `render service unreachable at ${RENDER_SERVICE_URL}`,
+                hint: "start the render service: cd render-service && npm start",
                 detail: (e as Error).message,
             },
             { status: 503 }
         );
     }
 
-    await fs.mkdir(OUTPUT_DIR, { recursive: true });
-    const outputPdf = path.join(
-        OUTPUT_DIR,
-        `template-preview-${id}-${Date.now()}.pdf`
-    );
-
-    let result: PreviewBridgeResult | null = null;
-    try {
-        const r = await fetch(`${BRIDGE_URL}/execute`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ code: buildPreviewCode(templatePath, outputPdf) }),
-            cache: "no-store",
+    const ct = upstream.headers.get("content-type") ?? "";
+    if (!ct.includes("application/pdf")) {
+        const text = await upstream.text();
+        return new Response(text, {
+            status: upstream.status,
+            headers: { "Content-Type": ct || "application/json" },
         });
-        const body = (await r.json()) as { result?: PreviewBridgeResult; error?: string };
-        if (!r.ok) {
-            return NextResponse.json(
-                { error: "bridge call failed", detail: body.error },
-                { status: 502 }
-            );
-        }
-        result = body.result ?? null;
-    } catch (e) {
-        return NextResponse.json(
-            { error: "bridge call failed", detail: (e as Error).message },
-            { status: 502 }
-        );
     }
 
-    if (!result || result.ok !== true) {
-        return NextResponse.json(
-            { error: "preview render failed", detail: result?.error ?? "unknown" },
-            { status: 500 }
-        );
-    }
-
-    let pdfBytes: Buffer;
-    try {
-        pdfBytes = await fs.readFile(outputPdf);
-    } catch (e) {
-        return NextResponse.json(
-            {
-                error: "preview reported success but PDF not found on disk",
-                expected: outputPdf,
-                detail: (e as Error).message,
-            },
-            { status: 500 }
-        );
-    }
-
-    fs.unlink(outputPdf).catch(() => {
-        /* output/ is gitignored */
-    });
-
-    return new Response(new Uint8Array(pdfBytes), {
-        status: 200,
-        headers: {
-            "Content-Type": "application/pdf",
-            "Content-Length": String(pdfBytes.length),
-            // inline + filename hint so the browser viewer shows it instead of
-            // immediately downloading, but a "Save" still produces a sensible name.
-            "Content-Disposition": `inline; filename="${tpl.label.replace(/[^A-Za-z0-9 _.-]/g, "_")}.pdf"`,
-            // Don't cache aggressively — preview content depends on the
-            // .indd which can change underneath us during dev.
-            "Cache-Control": "private, max-age=10",
-        },
-    });
+    const bytes = new Uint8Array(await upstream.arrayBuffer());
+    const headers = new Headers();
+    copyResponseHeaders(upstream.headers, headers);
+    headers.set("Content-Length", String(bytes.length));
+    return new Response(bytes, { status: upstream.status, headers });
 }
