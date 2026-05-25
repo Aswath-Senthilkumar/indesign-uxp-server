@@ -28,7 +28,11 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { WORKFLOWS, type WorkflowId, isWorkflowId } from "./workflows";
 
-const TEMPLATES_DIR = path.resolve(process.cwd(), "templates");
+// Manifests moved out of dashboard/ during the 2026-05-16 restructure.
+// They now live at <repo>/template-manifests/<workflow>/<TemplateName>/
+// (committed). The dashboard is a Next.js app run from dashboard/,
+// so process.cwd() = dashboard/; one level up is the repo root.
+const TEMPLATES_DIR = path.resolve(process.cwd(), "..", "template-manifests");
 
 export interface TileField {
     field: string;
