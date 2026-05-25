@@ -123,3 +123,11 @@ mock-data/*/
 
 # Render output (regenerable from test-render.js)
 output/
+
+# Per-render scratch (BOV rename pass + future render working dirs).
+# Anything under <repo>/templates/ is now legacy — the .indd files
+# live at TEMPLATES_DIR (default <repo>/../indesign-templates/), out
+# of repo. <repo>/templates/working/ may still exist locally as the
+# BOV rename pass' safety snapshots; don't commit any of it.
+# Root-anchored so this rule doesn't apply to e.g. dashboard/app/api/templates/.
+/templates/
