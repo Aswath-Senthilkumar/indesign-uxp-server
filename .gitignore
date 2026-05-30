@@ -55,10 +55,11 @@ temp_script.jsx
 *.indt
 *.indb
 
-# IDE files
+# IDE and AI tool files
 .vscode/
 .idea/
 *.sublime-*
+.claude/
 
 # Logs
 logs
