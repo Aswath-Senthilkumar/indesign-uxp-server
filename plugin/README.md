@@ -1,76 +1,58 @@
-# Plugin manifest — permissions reasoning
+# plugin — UXP InDesign Plugin
 
-This file documents why each entry in [`manifest.json`](./manifest.json) is set
-the way it is. It exists to answer "why does this plugin need that?" without a
-reviewer having to chase the code.
+The Adobe InDesign UXP plugin that runs inside InDesign and connects to the bridge server. This is the innermost layer of the execution chain — every tool call and every render eventually arrives here.
 
-## Declared permissions
+## Files
 
-### `network.domains`
+| File | Purpose |
+|------|---------|
+| `manifest.json` | UXP plugin manifest (id, host version, permissions, entrypoints) |
+| `index.js` | Plugin logic — WebSocket client, code dispatch, heartbeat |
+| `index.html` | Panel UI (minimal — status indicator only) |
 
-Currently set to `"all"`:
+## How it works
 
-```json
-"network": { "domains": "all" }
-```
+1. When the panel is opened in InDesign (`Window → Plugins → InDesign Bridge`), `index.js` opens a WebSocket connection to `ws://127.0.0.1:3001`
+2. The bridge sends `{ type: "execute", code: "...", id: "..." }` messages
+3. The plugin runs each code string as:
+   ```js
+   new Function('app', `return (async () => { ${code} })()`)(app)
+   ```
+4. The result is `JSON.stringify`'d and sent back to the bridge as `{ type: "result", id, result }`
+5. A ping/pong heartbeat keeps the connection alive between calls
 
-**Why this is wider than it should be:** the plugin's only outbound
-connection is the WebSocket to the local bridge
-([`index.js:32`](./index.js)). It never talks to public internet, never
-fetches assets, never authenticates against a remote service. The right shape
-is a tight allow-list:
+The `app` global gives the code string full access to the InDesign DOM — documents, pages, frames, styles, export functions.
+
+## Code execution safety
+
+Code strings are trusted — they come from the bridge which can require `BRIDGE_TOKEN` auth. The structural mitigation is at the bridge boundary, not inside the plugin. See `bridge/README.md` for auth details.
+
+The `allowCodeGenerationFromStrings` permission is load-bearing for the `new Function()` dispatch. If the protocol is ever changed to a fixed dispatch table, this permission can be dropped.
+
+## Permissions declared in `manifest.json`
+
+### `network.domains: "all"`
+
+The plugin's only outbound connection is the WebSocket to the local bridge. The permission is intentionally broader than needed. The tighter form would be:
 
 ```json
 "network": { "domains": ["ws://127.0.0.1:3001", "ws://localhost:3001"] }
 ```
 
-**Status:** flagged in `analysis/safety-report.md` §1 as a Block-level concern.
-The pre-Stage-2 mitigation list (`pre-stage-2-prompt.md`) does **not** require
-it for the gate, so it is left as-is for now and tracked as a follow-up. We
-should tighten it before the plugin is loaded on any shared machine.
+This is tracked as a hardening follow-up — it should be tightened before the plugin is deployed on any shared machine.
 
-### `allowCodeGenerationFromStrings`
+### `allowCodeGenerationFromStrings: true`
 
-Set to `true` because the plugin compiles JS code strings sent over the
-WebSocket and runs them with the InDesign `app` global injected
-([`index.js:22-29`](./index.js)). This is load-bearing — without it the plugin
-has no way to dispatch operations. The structural mitigation lives at the
-*bridge* boundary: the bridge requires `BRIDGE_TOKEN` Bearer auth, so only
-processes that hold the token can submit code strings.
+Required for `new Function()`. Without it, code dispatch is impossible. The bridge's `BRIDGE_TOKEN` auth is the mitigating control.
 
-If we later replace the eval-string protocol with a fixed dispatch table of
-named operations, this permission can be dropped — that's a Stage 4+
-hardening, not Stage 2.
+## Permissions deliberately NOT declared
 
-## Permissions we deliberately do NOT request
-
-### `localFileSystem`
-
-**Not declared.** All file operations in our flow (open template, save copy,
-export PDF, place image) happen via the InDesign DOM, e.g.
-`new File(path)` / `doc.exportFile(format, path)` / `rect.place(path)`. Those
-calls run in InDesign's process and use InDesign's own file-access model —
-they don't go through UXP's storage API.
-
-If we ever need the plugin itself to read or write files directly from JS
-(parse a CSV, stream a log to disk, scan a templates folder), we'd add
-`"localFileSystem": "fullAccess"`. The reasoning would be:
-
-- Hannah's InDesign templates may live in OneDrive-synced or
-  user-chosen folders that vary per machine.
-- Exported PDFs go to user-specified output paths, not a fixed
-  plugin-managed directory.
-- The narrower `extensions-only` scope confines reads/writes to the
-  plugin's own data directory and doesn't fit either of the above.
-
-We are choosing **not** to request `localFileSystem` until a concrete handler
-needs it. Principle of least privilege.
-
-### `clipboard`, `webview`, `enableSWCSupport`, `launchProcess`
-
-**Not declared.** The plugin doesn't touch the clipboard, doesn't render web
-views, doesn't load Spectrum Web Components, doesn't shell out. None are
-needed for the team-sheet render flow.
+| Permission | Reason not needed |
+|------------|-------------------|
+| `localFileSystem` | All file operations (open template, export PDF, place image) use the InDesign DOM (`doc.exportFile`, `rect.place`) which runs in InDesign's process — not through UXP's storage API |
+| `clipboard` | No clipboard access needed |
+| `webview` | No web views needed |
+| `launchProcess` | No shell-out needed |
 
 ## Host constraints
 
@@ -78,13 +60,26 @@ needed for the team-sheet render flow.
 "host": { "app": "ID", "minVersion": "18.0" }
 ```
 
-`18.0` = InDesign 2023. Adobe shipped UXP plugin support for InDesign in 2023.
-Our team standardizes on InDesign 2024+ but the manifest stays at 18.0 to
-avoid blocking developers on older minor versions during testing.
+`18.0` = InDesign 2023 (first version with UXP plugin support). The team uses InDesign 2024+ but the manifest stays at `18.0` to avoid blocking developers on older minor versions during testing.
 
 ## Entrypoints
 
-A single panel (`mainPanel`). No menu commands, no document-event hooks. The
-WebSocket is opened only when the user shows the panel
-([`index.js:70-87`](./index.js)). If the user closes InDesign or never opens
-the panel, the plugin is inert.
+A single panel (`mainPanel`). No menu commands, no document event hooks. The WebSocket is opened only when the user shows the panel. If InDesign is open but the panel is closed, the plugin is completely inert.
+
+## UXP API notes
+
+- InDesign collections require `.item(n)` — bracket access `[n]` returns undefined
+- `doc.filePath` is async — always `await` it
+- Enums via `require('indesign')`: `ExportFormat.pdfType`, `FitOptions.fillProportionally`, etc.
+- `exportFile(format, path)` — format arg is first (same as ExtendScript)
+- `OpenOptions.openCopy` opens a fresh copy — use this for renders to avoid mutating the source template
+- `$.writeln` is ExtendScript only — not available in UXP. Use `console.log` for debug output
+
+## Installation
+
+Load via **UXP Developer Tool** (Adobe Creative Cloud app):
+1. Open UXP Developer Tool
+2. Add plugin → point to `plugin/` folder
+3. Click **Load**
+4. In InDesign: `Window → Plugins → InDesign Bridge`
+5. The panel shows "Connected to bridge ✓" when the bridge is running

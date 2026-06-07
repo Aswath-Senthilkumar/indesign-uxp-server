@@ -46,6 +46,7 @@ import previewRouter from "./routes/preview.js";
 import teamsheetIntrospectRouter from "./teamsheet/routes/introspect.js";
 import teamsheetPageFieldsRouter from "./teamsheet/routes/page-fields.js";
 import teamsheetRenderRouter from "./teamsheet/routes/render.js";
+import bovRouter from "./bov/index.js";
 
 const app = express();
 app.disable("x-powered-by");
@@ -66,15 +67,8 @@ app.use(teamsheetIntrospectRouter);
 app.use(teamsheetPageFieldsRouter);
 app.use(teamsheetRenderRouter);
 
-// === BOV mount point (reserved) ============================================
-// When BOV development starts, drop a router into render-service/bov/routes/
-// and mount it here under /bov. Do NOT change the flat team-sheet paths
-// above — master-app's team-sheet integration relies on them unchanged.
-//
-//   import bovRenderRouter from "./bov/routes/render.js";
-//   app.use("/bov", bovRenderRouter);
-//
-// ============================================================================
+// BOV routes — mounted at /bov
+app.use("/bov", bovRouter);
 
 // Fallback for unmatched routes — JSON 404 instead of HTML.
 app.use((req, res) => {

@@ -1,0 +1,21 @@
+{
+    "$schema_note": "BOV Cover template manifest. Two pages: page 1 = cover, page 2 = TOC. The five sections_6_* frames on page 2 are conditionally rendered per deal; section_6_LOR and section_6_contacts are always present.",
+    "id": "bov-cover",
+    "label": "BOV Cover",
+    "file": "BOV - Cover.indd",
+    "bov_step": 1,
+    "page_fields": [
+        { "field": "cover_date",               "frame": "cover_date",               "type": "text",  "page": 1 },
+        { "field": "client_name",              "frame": "client_name",              "type": "text",  "page": 1 },
+        { "field": "client_property_address",  "frame": "client_property_address",  "type": "text",  "page": 1 },
+        { "field": "cover_image",              "frame": "cover_image",              "type": "image", "page": 1 }
+    ],
+    "toc_section6_toggles": [
+        { "frame": "sections_6_recent_industrial_transactions",       "label": "Our Team's Recent Industrial Transactions" },
+        { "frame": "sections_6_recent_heavy_industrial_transactions",  "label": "Recent Heavy Industrial Transactions"      },
+        { "frame": "sections_6_nw_phoenix_transactions",              "label": "NW Phoenix Industrial Transactions"        },
+        { "frame": "sections_6_sw_phoenix_transactions",              "label": "SW Phoenix Industrial Transactions"        },
+        { "frame": "sections_6_sky_harbor_transactions",              "label": "Sky Harbor Industrial Transactions"        }
+    ],
+    "static_frames_note": "cover_rg_logo_lockup, cover_banner_shape, cover_prepared_for_bar_background_*, cover_date_background, bov_proposal_title, and all three cover_broker*_text frames are managed in InDesign directly."
+}

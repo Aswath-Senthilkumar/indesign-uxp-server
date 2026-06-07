@@ -591,6 +591,21 @@ If any prior test regresses, the implementation is wrong — restore to
 
 ---
 
+## BOV endpoints
+
+BOV routes are mounted at `/bov/*`. Each section renders independently and returns `application/pdf`.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/bov/cover/render` | Render BOV cover page (multipart/form-data with image upload) |
+| `POST` | `/bov/section1/render` | Render Section 1 — 3 pages: Similar Transactions, Executive Summary, Pricing |
+
+BOV routes do not use the manifest registry or `comp_ids[]`. Each route accepts its own `multipart/form-data` shape — see [`bov/README.md`](bov/README.md) for the full field list and InDesign frame names.
+
+Additional sections (`/bov/section2/render` etc.) follow the same pattern as `section1` — see the "Adding a new section" guide in `bov/README.md`.
+
+---
+
 ## What changed vs. the old dashboard routes
 
 - New input contract for `/render`: **comp_ids only**, no Comp

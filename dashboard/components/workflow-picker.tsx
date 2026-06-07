@@ -24,7 +24,7 @@ export default function WorkflowPicker({ workflows }: WorkflowPickerProps) {
         const w = workflows.find((x) => x.id === selectedId);
         if (!w || !w.available) return;
         setWorkflow(w.id);
-        router.push("/build/template");
+        router.push(w.id === "bov" ? "/bov/step/1" : "/build/template");
     }
 
     return (

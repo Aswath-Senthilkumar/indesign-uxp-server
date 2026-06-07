@@ -41,9 +41,7 @@ export const WORKFLOWS: Record<WorkflowId, WorkflowMeta> = {
         label: "BOV",
         description:
             "Broker Opinion of Value. Multi-page comparable sets for a subject property.",
-        available: false,
-        comingSoonNote:
-            "BOV automation is in scoping. Will land as a heavily-customized single template with per-page comp distribution.",
+        available: true,
     },
 };
 

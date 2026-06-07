@@ -1,104 +1,156 @@
-# InDesign UXP MCP Server
+# InDesign UXP Automation Server
 
 > **Forked from** [zachshallbetter/indesign-mcp-server](https://github.com/zachshallbetter/indesign-mcp-server) — rewritten to use Adobe's UXP plugin platform instead of AppleScript.
 
-A Model Context Protocol (MCP) server that gives AI assistants direct, native control over Adobe InDesign via a UXP plugin bridge. ~130 tools covering the full InDesign feature set — documents, pages, text, graphics, styles, master spreads, books, and export.
+A multi-service system for automating Adobe InDesign document production. Supports two workflows:
+
+- **Team sheets** — multi-tile comp sheets rendered from Supabase data via the MCP server or render service
+- **BOV** (Broker Opinion of Value) — multi-section, multi-page documents assembled step-by-step in the dashboard
+
+---
+
+## System map
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         dashboard (Next.js :4000)                    │
+│  Build workflow              │           BOV workflow                │
+│  (team-sheet picker + render)│  (7-step BOV document builder)        │
+└──────────────┬───────────────┴──────────────┬────────────────────────┘
+               │ HTTP proxies                  │ multipart/form-data
+               ▼                               ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│                    render-service (Express :8765)                     │
+│  /render  /introspect  /page-fields  /preview  /status               │
+│  /bov/cover/render  /bov/section1/render  …                          │
+│                                                                       │
+│  core/          teamsheet/          bov/                             │
+│  (manifest,     (pipeline,          (cover,                          │
+│   bridge-client, formatters,         section1,                       │
+│   supabase,      validators)         section2…)                      │
+│   images, …)                                                         │
+└──────────────────────────────┬────────────────────────────────────────┘
+                                │ HTTP POST /execute (code strings)
+                                ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│                       bridge (Express :3000 + WS :3001)               │
+│  Serial execution queue · 30s timeout · BRIDGE_TOKEN auth             │
+└──────────────────────────────┬────────────────────────────────────────┘
+                                │ WebSocket
+                                ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│              UXP Plugin (inside Adobe InDesign)                       │
+│  new Function('app', `return (async () => { code })()`)(app)          │
+└──────────────────────────────┬────────────────────────────────────────┘
+                                │
+                                ▼
+                       InDesign DOM → PDF export
+
+Separately:
+┌──────────────────────────────────────────────────────────────────────┐
+│               MCP Server (src/, stdio)                                │
+│  ~135 tools exposed to Claude / Cursor / any MCP client              │
+│  Uses same bridge → plugin chain                                      │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Sub-project READMEs
+
+| Directory | README | Description |
+|-----------|--------|-------------|
+| `bridge/` | [bridge/README.md](bridge/README.md) | HTTP + WebSocket relay; serial execution queue |
+| `src/` | [src/README.md](src/README.md) | MCP server; ~135 tools; handler categories |
+| `plugin/` | [plugin/README.md](plugin/README.md) | UXP plugin; code dispatch; permissions |
+| `render-service/` | [render-service/README.md](render-service/README.md) | Full render service; all endpoints; env vars; curl test plan |
+| `render-service/core/` | [render-service/core/README.md](render-service/core/README.md) | Shared substrate: bridge-client, manifest, images, Supabase |
+| `render-service/teamsheet/` | [render-service/teamsheet/README.md](render-service/teamsheet/README.md) | Team-sheet pipeline; formatters; tile field types |
+| `render-service/bov/` | [render-service/bov/README.md](render-service/bov/README.md) | BOV workflow; cover + section 1 complete; bridge patterns |
+| `template-manifests/` | [template-manifests/README.md](template-manifests/README.md) | Manifest schema; workflow registration; .indd file split |
+| `dashboard/` | [dashboard/README.md](dashboard/README.md) | Next.js app; Build + BOV workflows; API proxy routes |
 
 ---
 
 ## Why UXP vs AppleScript
 
-This server is a ground-up rewrite of the AppleScript-based [indesign-mcp-server](https://github.com/zachshallbetter/indesign-mcp-server). The execution model is fundamentally different.
+This server is a ground-up rewrite of the AppleScript-based original. The execution model is fundamentally different.
 
 | | AppleScript (original) | UXP (this fork) |
 |---|---|---|
 | **Platform** | macOS only | macOS + Windows |
 | **Execution path** | Node → temp JSX file → AppleScript → InDesign | Node → HTTP → WebSocket → InDesign plugin |
 | **Speed** | Slow — 3 hops, disk write per call | Fast — direct in-process call |
-| **Reliability** | Flaky — breaks if InDesign loses focus or system dialogs appear | Stable — not affected by focus or system state |
-| **Return values** | Strings only (last evaluated expression) | Full structured JSON objects |
-| **JS version** | ExtendScript (ES3 — no `const`, arrow functions, or `async/await`) | Modern JS (ES2015+ — `async/await`, destructuring, arrow functions) |
+| **Reliability** | Flaky — breaks on focus loss or system dialogs | Stable — unaffected by focus or system state |
+| **Return values** | Strings only | Full structured JSON |
+| **JS version** | ExtendScript (ES3) | Modern JS (ES2015+, `async/await`) |
 | **Error messages** | Cryptic AppleScript/OSA errors | Structured JSON with clear error strings |
-| **String handling** | Manual `escapeJsxString()` for every value | `JSON.stringify()` throughout — safe and simple |
-| **Enums** | Magic strings like `'PDF_TYPE'` | Typed enums via `require('indesign').ExportFormat.pdfType` |
-| **Async support** | Not supported — synchronous only | Native `await` (e.g. `await doc.filePath`) |
-| **Permissions** | macOS Automation + Accessibility in System Settings | None beyond InDesign plugin install |
-| **Future-proofing** | ❌ Adobe is deprecating ExtendScript/CEP | ✅ UXP is Adobe's official modern platform |
-
-**The short version**: The AppleScript version puppets InDesign from the outside via macOS automation, writing temp files and hoping nothing interrupts the chain. This version runs _inside_ InDesign as a first-class plugin — faster, more reliable, cross-platform, and built on the platform Adobe is investing in going forward.
+| **Future-proofing** | ❌ Adobe deprecating ExtendScript/CEP | ✅ UXP is Adobe's official modern platform |
 
 ---
 
-## How It Works
+## Getting started
 
-```
-Claude / MCP Client
-       │
-       ▼
-  MCP Server (Node.js)
-       │  POST /execute
-       ▼
-  Bridge HTTP Server (port 3000)
-       │  WebSocket
-       ▼
-  UXP Plugin (inside InDesign)
-       │  runs as async IIFE with `app` in scope
-       ▼
-  InDesign DOM
-```
-
-The UXP plugin maintains a persistent WebSocket connection to the bridge. When a tool is called, the handler sends a JS code string to the bridge, which forwards it to the plugin. The plugin runs it as `new Function('app', 'return (async () => { CODE })()')` and returns the result as JSON.
-
----
-
-## Prerequisites
+### Prerequisites
 
 - Adobe InDesign 2024+ (UXP plugin support required)
 - Node.js 18+
-- macOS or Windows
+- A Supabase project with a `comps` table (for BOV and team-sheet data)
 
----
+### 1. Install the UXP plugin
 
-## Setup
-
-### 1. Install the UXP Plugin
-
-Load the plugin via the UXP Developer Tool or InDesign's plugin manager:
-
+Load via **UXP Developer Tool** (Adobe Creative Cloud app):
 ```
-plugin/
-├── index.js        # Plugin entry point + WebSocket client
-└── manifest.json   # Plugin manifest
+plugin/manifest.json  ← point UXP Developer Tool here
 ```
 
-### 2. Start the Bridge
+In InDesign: `Window → Plugins → InDesign Bridge`
+
+### 2. Start the bridge
 
 ```bash
-# Kill any existing bridge processes
-lsof -ti:3001 | xargs kill 2>/dev/null
-lsof -ti:3000 | xargs kill 2>/dev/null
-
-# Start the bridge
-cd bridge && node server.js
-```
-
-### 3. Connect the Plugin
-
-In InDesign: **Window → Plugins → InDesign Bridge**
-
-The panel should show: `Connected to bridge ✓`
-
-### 4. Start the MCP Server
-
-```bash
+cd bridge
 npm install
+node server.js
+```
+
+### 3. Start the render service
+
+```bash
+cd render-service
+npm install
+cp .env.example .env
+# fill in SUPABASE_URL and SUPABASE_ANON_KEY
+node server.js
+```
+
+Verify the bridge and plugin are connected:
+
+```bash
+curl http://127.0.0.1:8765/status
+# { "connected": true, "queueDepth": 0 }
+```
+
+### 4. Start the dashboard
+
+```bash
+cd dashboard
+pnpm install
+# create .env.local with NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY
+pnpm dev
+# http://localhost:4000
+```
+
+### 5. (Optional) Start the MCP server
+
+For AI assistant integration (Claude, Cursor, etc.):
+
+```bash
+npm install   # from repo root
 npm start
 ```
 
-### 5. Configure Claude
-
-Add to `~/.claude.json` (or your MCP client config):
-
+Configure your MCP client:
 ```json
 {
   "mcpServers": {
@@ -110,23 +162,73 @@ Add to `~/.claude.json` (or your MCP client config):
 }
 ```
 
----
+### Startup order
 
-## Testing
-
-```bash
-# Quick sanity check (4 core tools)
-node tests/test-uxp-handlers.js
-
-# Full suite (27 tests across all handler categories)
-node tests/test-all-handlers.js
+```
+1. InDesign (open)
+2. UXP plugin panel (open)
+3. bridge            node server.js
+4. render-service    node server.js
+5. dashboard         pnpm dev
+6. MCP server        npm start   (optional)
 ```
 
-Current status: **27/27 passing** across all handler categories.
+---
+
+## Environment variables
+
+### render-service/.env
+
+| Variable | Default | Required |
+|----------|---------|----------|
+| `SUPABASE_URL` | — | Yes |
+| `SUPABASE_ANON_KEY` | — | Yes |
+| `PORT` | `8765` | No |
+| `BRIDGE_URL` | `http://127.0.0.1:3000` | No |
+| `TEMPLATES_DIR` | `../indesign-templates` (sibling dir) | No |
+| `TEMPLATE_MANIFEST_DIR` | `../template-manifests` | No |
+| `INDESIGN_REPO_ROOT` | parent of `render-service/` | No |
+| `SERVICE_TOKEN` | unset (auth disabled) | No |
+
+### dashboard/.env.local
+
+| Variable | Required |
+|----------|----------|
+| `NEXT_PUBLIC_SUPABASE_URL` | Yes |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes |
+| `RENDER_SERVICE_URL` | No (defaults to `http://127.0.0.1:8765`) |
+
+### bridge (optional)
+
+| Variable | Notes |
+|----------|-------|
+| `BRIDGE_TOKEN` | When set, require `Authorization: Bearer <token>` on `/execute` |
 
 ---
 
-## Tools
+## Workflows
+
+### Team sheets
+
+Renders multi-tile InDesign templates populated with comp data from Supabase. The render service exposes `/render`, `/introspect`, `/page-fields`, and `/preview`. The dashboard provides a 4-step wizard (workflow → template → comps → edit + render).
+
+See [`render-service/teamsheet/README.md`](render-service/teamsheet/README.md) for the full pipeline.
+
+### BOV (Broker Opinion of Value)
+
+A 7-step document builder in the dashboard. Each step renders one section of the BOV independently; the preview merges all sections in real time using `pdf-lib`.
+
+| Step | Section | Status |
+|------|---------|--------|
+| 1 | Cover page | Complete |
+| 2 | Section 1: Similar Transactions + Exec Summary + Pricing | Complete |
+| 3–7 | Sections 2–6 | Pending |
+
+See [`render-service/bov/README.md`](render-service/bov/README.md) for route details, frame names, and the patterns established in the completed sections.
+
+---
+
+## MCP tools (~135 total)
 
 ### Documents
 `create_document` `open_document` `save_document` `close_document` `get_document_info` `get_document_preferences` `set_document_preferences` `get_document_elements` `get_document_styles` `get_document_colors` `get_document_layers` `get_document_stories` `get_document_hyperlinks` `create_document_hyperlink` `get_document_sections` `create_document_section` `get_document_grid_settings` `set_document_grid_settings` `get_document_layout_preferences` `set_document_layout_preferences` `get_document_xml_structure` `export_document_xml` `preflight_document` `validate_document` `cleanup_document` `data_merge` `save_document_to_cloud` `open_cloud_document` `view_document`
@@ -166,49 +268,26 @@ Current status: **27/27 passing** across all handler categories.
 
 ---
 
-## Architecture
+## Testing (MCP server)
 
-```
-src/
-├── core/
-│   ├── InDesignMCPServer.js    # MCP server, tool registration
-│   ├── scriptExecutor.js       # executeViaUXP() — POSTs to bridge
-│   └── sessionManager.js       # Page dimension tracking, smart positioning
-├── handlers/
-│   ├── documentHandlers.js
-│   ├── pageHandlers.js
-│   ├── textHandlers.js
-│   ├── styleHandlers.js
-│   ├── graphicsHandlers.js
-│   ├── masterSpreadHandlers.js
-│   ├── pageItemHandlers.js
-│   ├── groupHandlers.js
-│   ├── bookHandlers.js
-│   ├── exportHandlers.js
-│   └── utilityHandlers.js
-├── types/                      # MCP tool schema definitions
-└── utils/stringUtils.js
-
-bridge/
-└── server.js                   # HTTP (port 3000) + WebSocket (port 3001) bridge
-
-plugin/
-├── index.js                    # UXP plugin — runs code inside InDesign
-└── manifest.json
-
-tests/
-├── test-uxp-handlers.js        # 4 core handler tests
-└── test-all-handlers.js        # 27-test comprehensive suite
+```bash
+node tests/test-uxp-handlers.js   # 4 core handler tests
+node tests/test-all-handlers.js   # full suite (27 tests)
 ```
 
-### Key UXP API Notes
+Current status: **27/27 passing** across all handler categories.
+
+---
+
+## UXP API notes (for contributors)
 
 - InDesign collections require `.item(n)` — bracket access `[n]` returns undefined
 - `doc.filePath` is async — always `await` it in UXP code
-- `exportFile(format, path)` — format arg is **first** (same as ExtendScript)
-- Enums via `require('indesign')`: `ExportFormat.pdfType`, `ColorModel.process`, etc.
-- Path strings work directly for `place()` and `exportFile()` — no UXP storage API needed
-- Code runs as `async IIFE` — use `return` to return values, `await` works natively
+- `exportFile(format, path)` — format arg is **first**
+- Enums via `require('indesign')`: `ExportFormat.pdfType`, `FitOptions.fillProportionally`, etc.
+- `OpenOptions.openCopy` — always use this for renders to avoid mutating the source template
+- `$.writeln` is **ExtendScript only** — throws `ReferenceError` in UXP. Use `console.log`
+- `para.contents = text` without a trailing `\r` strips the paragraph mark in UXP — use `tf.contents = lines.join('\r')` for multi-line frames
 
 ---
 
